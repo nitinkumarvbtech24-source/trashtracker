@@ -1,0 +1,8 @@
+# Garbage Dataset absolute paths config
+path: E:/AImodel/Garbage.v36-garbage-11-05-2026.yolov8
+train: train/images
+val: valid/images
+test: test/images
+
+nc: 2
+names: ['Garbage', 'Not Garbage']
