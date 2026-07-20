@@ -1,6 +1,5 @@
 torch
 torchvision
-tensorflow
 scikit-learn
 matplotlib
 pandas
@@ -8,4 +7,9 @@ numpy
 pillow
 tqdm
 seaborn
-
+Flask
+flask-cors
+ultralytics
+transformers
+opencv-python-headless
+gunicorn

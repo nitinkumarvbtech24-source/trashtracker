@@ -34,7 +34,18 @@ def load_pipeline():
     if not os.path.exists(CLASSIFIER_PATH):
         raise FileNotFoundError(f"Classifier model not found at {CLASSIFIER_PATH}. Please train the classifier first.")
     print("Loading Road Classifier (Keras)...")
-    classifier = tf.keras.models.load_model(CLASSIFIER_PATH)
+    
+    # Custom initializer to handle Keras 3 -> Keras 2 backward compatibility bugs in Colab
+    class SafeVarianceScaling(tf.keras.initializers.VarianceScaling):
+        def __init__(self, scale=1.0, mode="fan_in", distribution="truncated_normal", seed=None, **kwargs):
+            # Ignore extra kwargs like 'input_axes' or 'output_axes' that cause crashes
+            super().__init__(scale=scale, mode=mode, distribution=distribution, seed=seed)
+            
+    classifier = tf.keras.models.load_model(
+        CLASSIFIER_PATH, 
+        custom_objects={'VarianceScaling': SafeVarianceScaling},
+        compile=False
+    )
     
     # Load Stage 2 Detector
     if not os.path.exists(DETECTOR_PATH):

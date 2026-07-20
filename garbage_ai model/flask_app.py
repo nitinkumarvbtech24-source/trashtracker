@@ -8,22 +8,14 @@ from PIL import Image
 import io
 import tensorflow as tf
 from flask import Flask, request, jsonify, render_template_string
+from flask_cors import CORS
 from inference import load_pipeline, TRASH_CLASSES, CLIP_PROMPTS
 
 # Initialize Flask app
 app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
-# Load pipeline models globally
-print("Initializing AI Pipeline for Web Server...")
-# We discard the old YOLO classifier and load our new custom TFLite model
-_, detector, clip_model, clip_processor, device = load_pipeline()
-
-tflite_model_path = "outputs/road_cleanliness.tflite"
-print(f"Loading custom TFLite Road Classifier from {tflite_model_path}...")
-interpreter = tf.lite.Interpreter(model_path=tflite_model_path)
-interpreter.allocate_tensors()
-input_details = interpreter.get_input_details()
-output_details = interpreter.get_output_details()
+classifier, detector, clip_model, clip_processor, device = load_pipeline()
 
 print("AI Pipeline loaded successfully!")
 
@@ -460,17 +452,14 @@ def process_frame_route():
         rgb_frame = cv2.cvtColor(cv_frame, cv2.COLOR_BGR2RGB)
         pil_image = Image.fromarray(rgb_frame)
         
-        resized_frame = cv2.resize(rgb_frame, (224, 224))
-        input_data = np.expand_dims(np.array(resized_frame, dtype=np.float32), axis=0)
+        img_resized = pil_image.resize((224, 224))
+        input_data = np.expand_dims(np.array(img_resized, dtype=np.float32), axis=0)
 
-        interpreter.set_tensor(input_details[0]['index'], input_data)
-        interpreter.invoke()
-        predictions = interpreter.get_tensor(output_details[0]['index'])[0]
-
-        best_idx = np.argmax(predictions)
-        labels = ["Clean", "Slightly_Dirty", "Very_Dirty"]
+        preds = classifier.predict(input_data, verbose=0)
+        best_idx = np.argmax(preds[0])
+        labels = ["Clean", "Not_a_Road", "Slightly_Dirty", "Very_Dirty"]
         road_class = labels[best_idx]
-        confidence = float(predictions[best_idx])
+        confidence = float(preds[0][best_idx])
         
         road_class_map = {
             "Clean": "Clean Road",

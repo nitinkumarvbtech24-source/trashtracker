@@ -11,7 +11,7 @@ from flask_cors import CORS
 
 # Initialize Flask app
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*", "allow_headers": "*"}})
 
 # Config
 IMAGE_DIR = "captured_images"
@@ -663,4 +663,4 @@ if __name__ == "__main__":
         print("You can still use your local Wi-Fi network link.")
 
     # Run local Flask server on HTTP (Pinggy handles the HTTPS encryption externally)
-    app.run(host="0.0.0.0", port=5173, debug=False)
+    app.run(host="0.0.0.0", port=5000, debug=False)
