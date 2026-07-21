@@ -472,12 +472,15 @@ def process_frame_route():
         
         image_b64 = image_data.split(',')[1] if ',' in image_data else image_data
         image_bytes = base64.b64decode(image_b64)
-        np_arr = np.frombuffer(image_bytes, np.uint8)
-        cv_frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-        h_img, w_img, _ = cv_frame.shape
         
-        rgb_frame = cv2.cvtColor(cv_frame, cv2.COLOR_BGR2RGB)
-        pil_image = Image.fromarray(rgb_frame)
+        import io
+        from PIL import ImageOps
+        pil_image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+        pil_image = ImageOps.exif_transpose(pil_image)
+        
+        rgb_frame = np.array(pil_image)
+        cv_frame = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2BGR)
+        h_img, w_img, _ = cv_frame.shape
         
         img_resized = pil_image.resize((224, 224))
         input_data = np.expand_dims(np.array(img_resized, dtype=np.float32), axis=0)
