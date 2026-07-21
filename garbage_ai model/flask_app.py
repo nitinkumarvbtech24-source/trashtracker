@@ -7,7 +7,8 @@ import numpy as np
 from PIL import Image
 import io
 import tensorflow as tf
-from flask import Flask, request, jsonify, render_template_string
+import requests
+from flask import Flask, request, jsonify, render_template_string, Response
 from flask_cors import CORS
 from inference import load_pipeline, TRASH_CLASSES, CLIP_PROMPTS
 
@@ -426,11 +427,34 @@ import uuid
 
 # In-memory store for the dashboard feed
 recent_snapshots = []
-os.makedirs("static/images", exist_ok=True)
+for label in ["Clean", "Not_a_Road", "Slightly_Dirty", "Very_Dirty"]:
+    os.makedirs(f"static/images/{label}", exist_ok=True)
 
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
+
+from flask import send_from_directory
+from flask_cors import cross_origin
+
+@app.route('/images/<path:filename>')
+@cross_origin()
+def serve_image(filename):
+    """Serve images with CORS headers applied by flask_cors"""
+    return send_from_directory('static/images', filename)
+
+@app.route('/api/proxy_image')
+def proxy_image():
+    """Proxy Firebase Storage images to bypass Flutter Web CORS restrictions."""
+    url = request.args.get('url')
+    if not url:
+        return jsonify({"error": "Missing url parameter"}), 400
+        
+    try:
+        resp = requests.get(url)
+        return Response(resp.content, content_type=resp.headers.get('Content-Type', 'image/jpeg'))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/snapshots', methods=['GET'])
 def get_snapshots():
@@ -439,11 +463,14 @@ def get_snapshots():
 @app.route('/process_frame', methods=['POST'])
 def process_frame_route():
     try:
-        data = request.get_json()
-        image_b64 = data.get('image', '').split(',')[1] if 'image' in data and ',' in data['image'] else data.get('image', '')
-        lat = data.get('lat', 42.3601)
-        lng = data.get('lng', -71.0589)
+        data = request.json
+        image_data = data['image']
+        lat = data.get('lat', 0.0)
+        lng = data.get('lng', 0.0)
+        vehicle_number = data.get('vehicle_number', 'V-102')
+        ward = data.get('ward', 'Ward A')
         
+        image_b64 = image_data.split(',')[1] if ',' in image_data else image_data
         image_bytes = base64.b64decode(image_b64)
         np_arr = np.frombuffer(image_bytes, np.uint8)
         cv_frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
@@ -502,32 +529,40 @@ def process_frame_route():
         
         # Save frame and add to recent_snapshots for Dashboard
         filename = f"{uuid.uuid4().hex}.jpg"
-        filepath = os.path.join("static/images", filename)
+        filepath = os.path.join("static/images", road_class, filename)
         cv2.imwrite(filepath, annotated_frame)
+        
+        # Convert annotated frame back to base64 to send to flutter
+        _, buffer = cv2.imencode('.jpg', annotated_frame)
+        annotated_b64 = base64.b64encode(buffer).decode('utf-8')
         
         snapshot = {
             "filename": filename,
-            "image_url": f"/static/images/{filename}",
+            "image_url": f"/images/{road_class}/{filename}",
             "class": road_class,
             "display_class": road_class_str,
             "confidence": float(confidence),
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "lat": lat,
-            "lng": lng
+            "lng": lng,
+            "vehicle_number": vehicle_number,
+            "ward": ward
         }
         
         recent_snapshots.insert(0, snapshot)
         if len(recent_snapshots) > 50:
             oldest = recent_snapshots.pop()
             try:
-                os.remove(os.path.join("static/images", oldest["filename"]))
+                os.remove(os.path.join("static/images", oldest["class"], oldest["filename"]))
             except:
                 pass
         
         return jsonify({
             "road_status": road_class_str,
             "road_confidence": float(confidence),
-            "detections": detections
+            "detections": detections,
+            "annotated_image": annotated_b64,
+            "image_url": snapshot["image_url"]
         })
         
     except Exception as e:
