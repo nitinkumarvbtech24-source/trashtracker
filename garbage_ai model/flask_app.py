@@ -469,6 +469,8 @@ def process_frame_route():
         lng = data.get('lng', 0.0)
         vehicle_number = data.get('vehicle_number', 'V-102')
         ward = data.get('ward', 'Ward A')
+        session_id = data.get('session_id')
+        point_type = data.get('point_type')
         
         image_b64 = image_data.split(',')[1] if ',' in image_data else image_data
         image_bytes = base64.b64decode(image_b64)
@@ -549,7 +551,9 @@ def process_frame_route():
             "lat": lat,
             "lng": lng,
             "vehicle_number": vehicle_number,
-            "ward": ward
+            "ward": ward,
+            "session_id": session_id,
+            "point_type": point_type
         }
         
         recent_snapshots.insert(0, snapshot)
