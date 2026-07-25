@@ -484,50 +484,71 @@ def process_frame_route():
         cv_frame = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2BGR)
         h_img, w_img, _ = cv_frame.shape
         
-        img_resized = pil_image.resize((224, 224))
-        input_data = np.expand_dims(np.array(img_resized, dtype=np.float32), axis=0)
-
-        preds = classifier.predict(input_data, verbose=0)
-        best_idx = np.argmax(preds[0])
-        labels = ["Clean", "Not_a_Road", "Slightly_Dirty", "Very_Dirty"]
-        road_class = labels[best_idx]
-        confidence = float(preds[0][best_idx])
+        # 1. Zero-shot CLIP to verify if it's a road
+        road_verification_prompts = [
+            "a photo of a road, street, highway, asphalt pavement, or public street view",
+            "a photo of an indoor room, house interior, office, human face, sky view, indoor wall, furniture, tree close-up, animal, or anything other than a road"
+        ]
         
-        road_class_map = {
-            "Clean": "Clean Road",
-            "Slightly_Dirty": "Slightly Dirty Road",
-            "Very_Dirty": "Very Dirty Road"
-        }
-        road_class_str = road_class_map.get(road_class, road_class)
+        inputs_road = clip_processor(text=road_verification_prompts, images=pil_image, return_tensors="pt", padding=True).to(device)
+        with torch.no_grad():
+            outputs_road = clip_model(**inputs_road)
+            logits_per_image_road = outputs_road.logits_per_image
+            probs_road = logits_per_image_road.softmax(dim=-1).cpu().numpy()[0]
+            
+        road_prob = probs_road[0]
+        non_road_prob = probs_road[1]
         
         detections = []
         
-        if road_class != "Clean":
-            det_results = detector.predict(source=pil_image, conf=0.20, verbose=False)
+        if non_road_prob > road_prob:
+            road_class = "Not_a_Road"
+            road_class_str = "Not a Road"
+            confidence = float(non_road_prob)
+        else:
+            # 2. It is a road. Use YOLO to detect garbage and determine cleanliness
+            det_results = detector.predict(source=pil_image, conf=0.15, verbose=False)
             boxes = det_results[0].boxes
             
-            for box in boxes:
-                x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-                x1_crop, y1_crop = max(0, x1), max(0, y1)
-                x2_crop, y2_crop = min(w_img, x2), min(h_img, y2)
+            num_boxes = len(boxes)
+            
+            if num_boxes == 0:
+                road_class = "Clean"
+                road_class_str = "Clean Road"
+                confidence = float(road_prob)
+            else:
+                if num_boxes < 3:
+                    road_class = "Slightly_Dirty"
+                    road_class_str = "Slightly Dirty Road"
+                else:
+                    road_class = "Very_Dirty"
+                    road_class_str = "Very Dirty Road"
                 
-                if x2_crop > x1_crop and y2_crop > y1_crop:
-                    cropped_pil = pil_image.crop((x1_crop, y1_crop, x2_crop, y2_crop))
-                    inputs = clip_processor(text=CLIP_PROMPTS, images=cropped_pil, return_tensors="pt", padding=True).to(device)
-                    with torch.no_grad():
-                        outputs = clip_model(**inputs)
-                        probs_clip = outputs.logits_per_image.softmax(dim=-1).cpu().numpy()[0]
+                # Use max confidence of detected trash or high default
+                confidence = float(road_prob)
+                
+                for box in boxes:
+                    x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                    x1_crop, y1_crop = max(0, x1), max(0, y1)
+                    x2_crop, y2_crop = min(w_img, x2), min(h_img, y2)
+                    
+                    if x2_crop > x1_crop and y2_crop > y1_crop:
+                        cropped_pil = pil_image.crop((x1_crop, y1_crop, x2_crop, y2_crop))
+                        inputs = clip_processor(text=CLIP_PROMPTS, images=cropped_pil, return_tensors="pt", padding=True).to(device)
+                        with torch.no_grad():
+                            outputs = clip_model(**inputs)
+                            probs_clip = outputs.logits_per_image.softmax(dim=-1).cpu().numpy()[0]
+                            
+                        best_clip_idx = np.argmax(probs_clip)
+                        trash_type = TRASH_CLASSES[best_clip_idx]
+                        trash_conf = float(probs_clip[best_clip_idx])
                         
-                    best_clip_idx = np.argmax(probs_clip)
-                    trash_type = TRASH_CLASSES[best_clip_idx]
-                    trash_conf = float(probs_clip[best_clip_idx])
-                    
-                    detections.append({
-                        "box": [x1, y1, x2, y2],
-                        "trash_type": trash_type,
-                        "trash_confidence": trash_conf
-                    })
-                    
+                        detections.append({
+                            "box": [x1, y1, x2, y2],
+                            "trash_type": trash_type,
+                            "trash_confidence": trash_conf
+                        })
+                        
         annotated_frame = draw_overlays(cv_frame.copy(), road_class_str, confidence, detections)
         cv2.imshow("Live Phone Stream (Laptop View)", annotated_frame)
         cv2.waitKey(1)
