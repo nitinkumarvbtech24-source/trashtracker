@@ -6,7 +6,7 @@
 
     <application
         android:usesCleartextTraffic="true"
-        android:label="street_aiq_app"
+        android:label="Street AIQ Beacon"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

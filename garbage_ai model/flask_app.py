@@ -14,7 +14,7 @@ from inference import load_pipeline, TRASH_CLASSES, CLIP_PROMPTS
 
 # Initialize Flask app
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 classifier, detector, clip_model, clip_processor, device = load_pipeline()
 
@@ -424,9 +424,18 @@ def draw_overlays(cv_frame, road_status, road_conf, detections):
 import time
 from datetime import datetime
 import uuid
+import json
 
-# In-memory store for the dashboard feed
-recent_snapshots = []
+# In-memory store backed by JSON file for the dashboard feed
+snapshots_file = "snapshots.json"
+if os.path.exists(snapshots_file):
+    with open(snapshots_file, "r") as f:
+        try:
+            recent_snapshots = json.load(f)
+        except Exception:
+            recent_snapshots = []
+else:
+    recent_snapshots = []
 for label in ["Clean", "Not_a_Road", "Slightly_Dirty", "Very_Dirty"]:
     os.makedirs(f"static/images/{label}", exist_ok=True)
 
@@ -578,13 +587,16 @@ def process_frame_route():
         }
         
         recent_snapshots.insert(0, snapshot)
-        if len(recent_snapshots) > 50:
-            oldest = recent_snapshots.pop()
-            try:
-                os.remove(os.path.join("static/images", oldest["class"], oldest["filename"]))
-            except:
-                pass
+        # if len(recent_snapshots) > 50:
+        #     oldest = recent_snapshots.pop()
+        #     try:
+        #         os.remove(os.path.join("static/images", oldest["class"], oldest["filename"]))
+        #     except:
+        #         pass
         
+        with open(snapshots_file, "w") as f:
+            json.dump(recent_snapshots, f)
+            
         return jsonify({
             "road_status": road_class_str,
             "road_confidence": float(confidence),

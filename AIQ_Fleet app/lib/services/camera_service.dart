@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:uuid/uuid.dart';
 import 'database_service.dart';
 import '../constants.dart';
 
@@ -27,6 +28,59 @@ class CameraService extends ChangeNotifier {
 
   String _latestRoadStatus = 'UNKNOWN';
   String get latestRoadStatus => _latestRoadStatus;
+
+  // Analytics State
+  int _imagesCapturedToday = 0;
+  int _imagesFlaggedToday = 0;
+  int get imagesCapturedToday => _imagesCapturedToday;
+  int get imagesFlaggedToday => _imagesFlaggedToday;
+  String get _todayDateString => DateTime.now().toIso8601String().split('T')[0];
+
+  // Auto Capture State
+  bool _isAutoMode = false;
+  bool _isAutoCapturing = false;
+  double _intervalSeconds = 1.0;
+  Timer? _autoCaptureTimer;
+  String? _currentSessionId;
+
+  bool get isAutoMode => _isAutoMode;
+  bool get isAutoCapturing => _isAutoCapturing;
+  double get intervalSeconds => _intervalSeconds;
+
+  void setAutoMode(bool value) {
+    _isAutoMode = value;
+    notifyListeners();
+  }
+
+  void setIntervalSeconds(double value) {
+    _intervalSeconds = value;
+    notifyListeners();
+  }
+
+  void toggleAutoCapture(double Function() getLat, double Function() getLng, {VoidCallback? onSnap}) {
+    if (_isAutoCapturing) {
+      _autoCaptureTimer?.cancel();
+      captureManualSnapshot(getLat(), getLng(), sessionId: _currentSessionId, pointType: 'end');
+      _isAutoCapturing = false;
+      _currentSessionId = null;
+      notifyListeners();
+    } else {
+      _isAutoCapturing = true;
+      _currentSessionId = const Uuid().v4();
+      notifyListeners();
+      
+      captureManualSnapshot(getLat(), getLng(), sessionId: _currentSessionId, pointType: 'start');
+      if (onSnap != null) onSnap();
+
+      _autoCaptureTimer = Timer.periodic(
+        Duration(milliseconds: (_intervalSeconds * 1000).toInt()),
+        (timer) {
+          captureManualSnapshot(getLat(), getLng(), sessionId: _currentSessionId, pointType: 'intermediate');
+          if (onSnap != null) onSnap();
+        },
+      );
+    }
+  }
 
   CameraController? get controller => _controller;
   bool get isRecording => _isRecording;
@@ -76,7 +130,10 @@ class CameraService extends ChangeNotifier {
 
   Future<void> _checkHealth() async {
     try {
-      final response = await http.get(Uri.parse('$GARBAGE_AI_URL/api/snapshots')).timeout(const Duration(seconds: 3));
+      final response = await http.get(
+        Uri.parse('$GARBAGE_AI_URL/api/snapshots'),
+        headers: {'ngrok-skip-browser-warning': 'true'}
+      ).timeout(const Duration(seconds: 3));
       final connected = response.statusCode == 200;
       if (_isBackendConnected != connected) {
         _isBackendConnected = connected;
@@ -184,6 +241,21 @@ class CameraService extends ChangeNotifier {
             notifyListeners();
           }
 
+          // Analytics updates
+          _imagesCapturedToday++;
+          if (roadStatus == 'Very Dirty Road' || roadStatus == 'Slightly Dirty Road') {
+            _imagesFlaggedToday++;
+          }
+          
+          // Sync analytics to Firestore
+          FirebaseFirestore.instance.collection('vehicles').doc(vehicleNumber)
+            .collection('daily_stats').doc(_todayDateString)
+            .set({
+              'images_captured': _imagesCapturedToday,
+              'images_flagged': _imagesFlaggedToday,
+              'last_updated': FieldValue.serverTimestamp(),
+            }, SetOptions(merge: true));
+
           combinedResult['garbage'] = {
             'road_status': roadStatus,
             'road_confidence': confidence
@@ -191,14 +263,12 @@ class CameraService extends ChangeNotifier {
           
           if (imageUrl != null) {
             try {
-              final fullImageUrl = '$GARBAGE_AI_URL$imageUrl';
-              
               await FirebaseFirestore.instance.collection('trash_spots').add({
                 'lat': lat,
                 'lng': lng,
                 'road_status': roadStatus,
                 'confidence': confidence,
-                'image_url': fullImageUrl,
+                'image_url': imageUrl,
                 'timestamp': FieldValue.serverTimestamp(),
                 'status': (roadStatus == 'Very Dirty Road' || roadStatus == 'Slightly Dirty Road') ? 'Flagged' : 'Logged',
                 'vehicle_number': vehicleNumber,
@@ -245,6 +315,7 @@ class CameraService extends ChangeNotifier {
     _chunkTimer?.cancel();
     _snapshotTimer?.cancel();
     _healthCheckTimer?.cancel();
+    _autoCaptureTimer?.cancel();
     super.dispose();
   }
 }

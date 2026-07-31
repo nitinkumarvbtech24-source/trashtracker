@@ -7,6 +7,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/telemetry_service.dart';
 import '../services/auth_service.dart';
 import '../services/ai_estimation_service.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import '../services/camera_service.dart';
 
 class TrailSegment {
@@ -14,6 +16,20 @@ class TrailSegment {
   final LatLng end;
   final Color color;
   TrailSegment({required this.start, required this.end, required this.color});
+
+  Map<String, dynamic> toJson() => {
+    'startLat': start.latitude,
+    'startLng': start.longitude,
+    'endLat': end.latitude,
+    'endLng': end.longitude,
+    'color': color.value,
+  };
+
+  factory TrailSegment.fromJson(Map<String, dynamic> json) => TrailSegment(
+    start: LatLng(json['startLat'], json['startLng']),
+    end: LatLng(json['endLat'], json['endLng']),
+    color: Color(json['color']),
+  );
 }
 
 class MapScreen extends StatefulWidget {
@@ -26,9 +42,11 @@ class MapScreen extends StatefulWidget {
 class _MapScreenState extends State<MapScreen> {
   final MapController _mapController = MapController();
   bool _isNavigating = false;
+  bool _isFollowingUser = false;
   List<LatLng> _assignedRoute = [];
   List<LatLng> _assignedCheckpoints = [];
   StreamSubscription<DocumentSnapshot>? _routeSub;
+  String get _todayDateString => DateTime.now().toIso8601String().split('T')[0];
 
   // Trail state
   List<TrailSegment> _navigationTrail = [];
@@ -68,27 +86,83 @@ class _MapScreenState extends State<MapScreen> {
       if (_lastRecordedPosition != null) {
         final distance = const Distance().as(LengthUnit.Meter, _lastRecordedPosition!, currentLoc);
         
-        // Add a segment if moved more than 2 meters
-        if (distance > 2.0) {
+        // Add a segment if moved more than 10 meters to avoid spamming OSRM
+        if (distance > 10.0) {
           final cameraService = context.read<CameraService>();
           final status = cameraService.latestRoadStatus;
           
           Color segmentColor = Colors.blueAccent; // Default color
           if (status == 'Clean Road') segmentColor = Colors.greenAccent;
-          else if (status == 'Slightly Dirty Road') segmentColor = Colors.orangeAccent; // Orange is more visible than yellow on map
+          else if (status == 'Slightly Dirty Road') segmentColor = Colors.orangeAccent;
           else if (status == 'Very Dirty Road') segmentColor = Colors.redAccent;
 
-          setState(() {
-            _navigationTrail.add(TrailSegment(
-              start: _lastRecordedPosition!,
-              end: currentLoc,
-              color: segmentColor
-            ));
-            _lastRecordedPosition = currentLoc;
-          });
+          final start = _lastRecordedPosition!;
+          final end = currentLoc;
+          _lastRecordedPosition = currentLoc;
+
+          _fetchSnappedRoute(start, end, segmentColor);
         }
       } else {
         _lastRecordedPosition = currentLoc;
+      }
+    }
+  }
+
+  Future<void> _fetchSnappedRoute(LatLng start, LatLng end, Color color) async {
+    try {
+      final url = 'http://router.project-osrm.org/route/v1/driving/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=geojson';
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['routes'] != null && data['routes'].isNotEmpty) {
+          final coords = data['routes'][0]['geometry']['coordinates'] as List;
+          final List<LatLng> snappedPoints = coords.map((c) => LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble())).toList();
+          
+          if (mounted) {
+            List<TrailSegment> newSegments = [];
+            for (int i = 0; i < snappedPoints.length - 1; i++) {
+              newSegments.add(TrailSegment(
+                start: snappedPoints[i],
+                end: snappedPoints[i + 1],
+                color: color
+              ));
+            }
+            setState(() {
+              _navigationTrail.addAll(newSegments);
+            });
+            
+            // Save to Firestore
+            final authService = context.read<AuthService>();
+            final vehicleNo = authService.vehicleNumber;
+            if (vehicleNo != null) {
+              FirebaseFirestore.instance.collection('vehicles').doc(vehicleNo)
+                .collection('daily_stats').doc(_todayDateString)
+                .set({
+                  'trail': FieldValue.arrayUnion(newSegments.map((s) => s.toJson()).toList())
+                }, SetOptions(merge: true)).catchError((_) {});
+            }
+          }
+          return;
+        }
+      }
+    } catch (e) {
+      debugPrint("OSRM error: $e");
+    }
+    
+    // Fallback to straight line if OSRM fails
+    if (mounted) {
+      final seg = TrailSegment(start: start, end: end, color: color);
+      setState(() {
+        _navigationTrail.add(seg);
+      });
+      final authService = context.read<AuthService>();
+      final vehicleNo = authService.vehicleNumber;
+      if (vehicleNo != null) {
+        FirebaseFirestore.instance.collection('vehicles').doc(vehicleNo)
+          .collection('daily_stats').doc(_todayDateString)
+          .set({
+            'trail': FieldValue.arrayUnion([seg.toJson()])
+          }, SetOptions(merge: true)).catchError((_) {});
       }
     }
   }
@@ -98,6 +172,20 @@ class _MapScreenState extends State<MapScreen> {
     final vehicleNo = authService.vehicleNumber;
     
     if (vehicleNo != null && vehicleNo.isNotEmpty) {
+      // Load saved trail for today
+      FirebaseFirestore.instance.collection('vehicles').doc(vehicleNo)
+          .collection('daily_stats').doc(_todayDateString)
+          .get().then((doc) {
+            if (doc.exists && doc.data() != null && doc.data()!['trail'] != null) {
+              final trailList = doc.data()!['trail'] as List;
+              if (mounted) {
+                setState(() {
+                  _navigationTrail = trailList.map((e) => TrailSegment.fromJson(e)).toList();
+                });
+              }
+            }
+          }).catchError((_) {});
+
       _routeSub = FirebaseFirestore.instance
           .collection('vehicles')
           .doc(vehicleNo)
@@ -148,14 +236,82 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // In case we want to clean up listener safely later, though typically Provider takes care of it
+  }
+
+  Future<void> _showTripsDialog() async {
+    final authService = context.read<AuthService>();
+    final vehicleNo = authService.vehicleNumber;
+    if (vehicleNo == null) return;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E293B),
+      isScrollControlled: true,
+      builder: (context) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.6,
+          maxChildSize: 0.9,
+          minChildSize: 0.4,
+          expand: false,
+          builder: (context, scrollController) {
+            return Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Text('Trips History', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                ),
+                Expanded(
+                  child: StreamBuilder<QuerySnapshot>(
+                    stream: FirebaseFirestore.instance
+                        .collection('vehicles')
+                        .doc(vehicleNo)
+                        .collection('trips')
+                        .orderBy('startTime', descending: true)
+                        .snapshots(),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+                      if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                        return const Center(child: Text('No trips found.', style: TextStyle(color: Colors.white70)));
+                      }
+                      return ListView.builder(
+                        controller: scrollController,
+                        itemCount: snapshot.data!.docs.length,
+                        itemBuilder: (context, index) {
+                          final data = snapshot.data!.docs[index].data() as Map<String, dynamic>;
+                          final distance = (data['distanceKm'] as num?)?.toStringAsFixed(2) ?? '0.00';
+                          final flags = data['flags'] ?? 0;
+                          final startTime = DateTime.tryParse(data['startTime'] ?? '')?.toLocal();
+                          final startStr = startTime != null ? '${startTime.hour}:${startTime.minute.toString().padLeft(2, '0')}' : 'N/A';
+                          
+                          return Card(
+                            color: const Color(0xFF0F172A),
+                            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            child: ListTile(
+                              leading: const Icon(Icons.directions_car, color: Colors.blueAccent),
+                              title: Text('Trip ${data['date'] ?? ''} - $startStr', style: const TextStyle(color: Colors.white)),
+                              subtitle: Text('Distance: $distance km • Flags: $flags', style: const TextStyle(color: Colors.white70)),
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   void _toggleNavigation(LatLng? currentLoc, double heading) {
     setState(() {
       _isNavigating = !_isNavigating;
+      _isFollowingUser = _isNavigating;
       if (_isNavigating) {
-        _navigationTrail.clear();
         _lastRecordedPosition = currentLoc;
       } else {
         _lastRecordedPosition = null;
@@ -175,6 +331,7 @@ class _MapScreenState extends State<MapScreen> {
   void _centerOnCurrentLocation() {
     final currentPos = context.read<TelemetryService>().currentPosition;
     if (currentPos != null) {
+      setState(() => _isFollowingUser = true);
       _mapController.move(LatLng(currentPos.latitude, currentPos.longitude), 18.0);
     }
   }
@@ -260,7 +417,7 @@ class _MapScreenState extends State<MapScreen> {
             if (spot['image_url'] != null)
               ClipRRect(
                 borderRadius: BorderRadius.circular(8),
-                child: Image.network(spot['image_url'], height: 200, width: double.infinity, fit: BoxFit.cover),
+                child: Image.network(spot['image_url'], headers: const {"ngrok-skip-browser-warning": "true"}, height: 200, width: double.infinity, fit: BoxFit.cover),
               ),
             const SizedBox(height: 16),
             Text(
@@ -276,6 +433,54 @@ class _MapScreenState extends State<MapScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  void _showAnalyticsPopup() {
+    final telemetry = context.read<TelemetryService>();
+    final camera = context.read<CameraService>();
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1E293B),
+        title: const Row(
+          children: [
+            Icon(Icons.analytics_rounded, color: Colors.blueAccent),
+            SizedBox(width: 8),
+            Text('Daily Analytics', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildAnalyticRow(Icons.route, 'Total Distance:', '${telemetry.totalDistanceKm.toStringAsFixed(2)} km'),
+            const SizedBox(height: 12),
+            _buildAnalyticRow(Icons.camera_alt, 'Images Captured:', '${camera.imagesCapturedToday}'),
+            const SizedBox(height: 12),
+            _buildAnalyticRow(Icons.flag, 'Flagged Issues:', '${camera.imagesFlaggedToday}', color: Colors.redAccent),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close', style: TextStyle(color: Colors.white54)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAnalyticRow(IconData icon, String label, String value, {Color? color}) {
+    return Row(
+      children: [
+        Icon(icon, color: color ?? Colors.white70, size: 20),
+        const SizedBox(width: 8),
+        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 16)),
+        const Spacer(),
+        Text(value, style: TextStyle(color: color ?? Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
+      ],
     );
   }
 
@@ -319,7 +524,7 @@ class _MapScreenState extends State<MapScreen> {
       }
 
       // Follow the user if navigating
-      if (_isNavigating) {
+      if (_isFollowingUser) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _mapController.moveAndRotate(currentLoc, 18.0, heading);
         });
@@ -336,8 +541,8 @@ class _MapScreenState extends State<MapScreen> {
               initialCenter: initialCenter,
               initialZoom: 15.0,
               onPositionChanged: (position, hasGesture) {
-                if (hasGesture && _isNavigating) {
-                  setState(() => _isNavigating = false);
+                if (hasGesture && _isFollowingUser) {
+                  setState(() => _isFollowingUser = false);
                 }
               },
             ),
@@ -485,6 +690,59 @@ class _MapScreenState extends State<MapScreen> {
               onPressed: _centerOnCurrentLocation,
               backgroundColor: Colors.white,
               child: const Icon(Icons.my_location_rounded, color: Colors.blueAccent),
+            ),
+          ),
+          
+          // Analytics Button
+          Positioned(
+            bottom: 280,
+            right: 24,
+            child: FloatingActionButton(
+              heroTag: 'analytics',
+              onPressed: _showAnalyticsPopup,
+              backgroundColor: Colors.blueAccent,
+              child: const Icon(Icons.analytics_rounded, color: Colors.white),
+            ),
+          ),
+          
+          // Auto Camera Button
+          Positioned(
+            bottom: 350,
+            right: 24,
+            child: Consumer<CameraService>(
+              builder: (context, camera, child) {
+                final isCapturing = camera.isAutoCapturing;
+                return FloatingActionButton(
+                  heroTag: 'auto_camera',
+                  onPressed: () {
+                    final telemetry = context.read<TelemetryService>();
+                    if (!camera.isAutoMode) {
+                      camera.setAutoMode(true);
+                    }
+                    camera.toggleAutoCapture(
+                      () => telemetry.currentPosition?.latitude ?? 42.3601,
+                      () => telemetry.currentPosition?.longitude ?? -71.0589,
+                    );
+                  },
+                  backgroundColor: isCapturing ? Colors.redAccent : Colors.white,
+                  child: Icon(
+                    isCapturing ? Icons.stop_rounded : Icons.camera_alt_rounded,
+                    color: isCapturing ? Colors.white : Colors.blueAccent,
+                  ),
+                );
+              },
+            ),
+          ),
+          
+          // Trips Button
+          Positioned(
+            bottom: 420,
+            right: 24,
+            child: FloatingActionButton(
+              heroTag: 'trips_history',
+              onPressed: _showTripsDialog,
+              backgroundColor: Colors.indigoAccent,
+              child: const Icon(Icons.history_rounded, color: Colors.white),
             ),
           ),
           
