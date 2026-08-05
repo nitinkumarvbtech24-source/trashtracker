@@ -57,14 +57,19 @@ class CameraService extends ChangeNotifier {
     notifyListeners();
   }
 
-  void toggleAutoCapture(double Function() getLat, double Function() getLng, {VoidCallback? onSnap}) {
+  Future<void> toggleAutoCapture(double Function() getLat, double Function() getLng, {VoidCallback? onSnap}) async {
     if (_isAutoCapturing) {
       _autoCaptureTimer?.cancel();
       captureManualSnapshot(getLat(), getLng(), sessionId: _currentSessionId, pointType: 'end');
       _isAutoCapturing = false;
       _currentSessionId = null;
+      _latestRoadStatus = 'UNKNOWN';
       notifyListeners();
     } else {
+      if (!isInitialized) {
+        await initialize();
+      }
+      
       _isAutoCapturing = true;
       _currentSessionId = const Uuid().v4();
       notifyListeners();
@@ -262,22 +267,24 @@ class CameraService extends ChangeNotifier {
           };
           
           if (imageUrl != null) {
-            try {
-              await FirebaseFirestore.instance.collection('trash_spots').add({
-                'lat': lat,
-                'lng': lng,
-                'road_status': roadStatus,
-                'confidence': confidence,
-                'image_url': imageUrl,
-                'timestamp': FieldValue.serverTimestamp(),
-                'status': (roadStatus == 'Very Dirty Road' || roadStatus == 'Slightly Dirty Road') ? 'Flagged' : 'Logged',
-                'vehicle_number': vehicleNumber,
-                'ward': ward,
-                if (sessionId != null) 'session_id': sessionId,
-                if (pointType != null) 'point_type': pointType,
-              });
-            } catch (fbErr) {
-              debugPrint("Firestore Upload Error: $fbErr");
+            if (roadStatus == 'Very Dirty Road' || roadStatus == 'Slightly Dirty Road') {
+              try {
+                await FirebaseFirestore.instance.collection('trash_spots').add({
+                  'lat': lat,
+                  'lng': lng,
+                  'road_status': roadStatus,
+                  'confidence': confidence,
+                  'image_url': imageUrl,
+                  'timestamp': FieldValue.serverTimestamp(),
+                  'status': 'Flagged',
+                  'vehicle_number': vehicleNumber,
+                  'ward': ward,
+                  if (sessionId != null) 'session_id': sessionId,
+                  if (pointType != null) 'point_type': pointType,
+                });
+              } catch (fbErr) {
+                debugPrint("Firestore Upload Error: $fbErr");
+              }
             }
           }
         }
@@ -303,6 +310,7 @@ class CameraService extends ChangeNotifier {
       final file = await _controller!.stopVideoRecording();
       DatabaseService().insertVideoChunk(file.path, DateTime.now().millisecondsSinceEpoch);
       _isRecording = false;
+      _latestRoadStatus = 'UNKNOWN';
       notifyListeners();
     } catch (e) {
       debugPrint("Error stopping recording: $e");

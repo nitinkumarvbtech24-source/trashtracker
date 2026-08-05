@@ -10,6 +10,7 @@ import '../services/ai_estimation_service.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../services/camera_service.dart';
+import '../constants.dart';
 
 class TrailSegment {
   final LatLng start;
@@ -62,6 +63,18 @@ class _MapScreenState extends State<MapScreen> {
   // Trash Spots State
   List<Map<String, dynamic>> _trashSpots = [];
   StreamSubscription<QuerySnapshot>? _trashSub;
+  bool _showFlags = true;
+  bool _isZoomedInForFlags = false; // Zoom >= 16.5
+
+  bool _showSnapAnimation = false;
+
+  void _triggerSnapAnimation() {
+    if (!mounted) return;
+    setState(() => _showSnapAnimation = true);
+    Future.delayed(const Duration(milliseconds: 150), () {
+      if (mounted) setState(() => _showSnapAnimation = false);
+    });
+  }
 
   @override
   void initState() {
@@ -86,8 +99,8 @@ class _MapScreenState extends State<MapScreen> {
       if (_lastRecordedPosition != null) {
         final distance = const Distance().as(LengthUnit.Meter, _lastRecordedPosition!, currentLoc);
         
-        // Add a segment if moved more than 10 meters to avoid spamming OSRM
-        if (distance > 10.0) {
+        // Add a segment if moved more than 5 meters to improve tracing accuracy
+        if (distance > 5.0) {
           final cameraService = context.read<CameraService>();
           final status = cameraService.latestRoadStatus;
           
@@ -198,10 +211,14 @@ class _MapScreenState extends State<MapScreen> {
               if (data['assignedRoute'] != null) {
                 final List<dynamic> rawRoute = data['assignedRoute'];
                 _assignedRoute = rawRoute.map((e) => LatLng(e['lat'], e['lng'])).toList();
+              } else {
+                _assignedRoute = [];
               }
               if (data['assignedCheckpoints'] != null) {
                 final List<dynamic> rawCheckpoints = data['assignedCheckpoints'];
                 _assignedCheckpoints = rawCheckpoints.map((e) => LatLng(e['lat'], e['lng'])).toList();
+              } else {
+                _assignedCheckpoints = [];
               }
             });
           }
@@ -238,74 +255,6 @@ class _MapScreenState extends State<MapScreen> {
     super.didChangeDependencies();
   }
 
-  Future<void> _showTripsDialog() async {
-    final authService = context.read<AuthService>();
-    final vehicleNo = authService.vehicleNumber;
-    if (vehicleNo == null) return;
-
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF1E293B),
-      isScrollControlled: true,
-      builder: (context) {
-        return DraggableScrollableSheet(
-          initialChildSize: 0.6,
-          maxChildSize: 0.9,
-          minChildSize: 0.4,
-          expand: false,
-          builder: (context, scrollController) {
-            return Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Text('Trips History', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-                ),
-                Expanded(
-                  child: StreamBuilder<QuerySnapshot>(
-                    stream: FirebaseFirestore.instance
-                        .collection('vehicles')
-                        .doc(vehicleNo)
-                        .collection('trips')
-                        .orderBy('startTime', descending: true)
-                        .snapshots(),
-                    builder: (context, snapshot) {
-                      if (snapshot.connectionState == ConnectionState.waiting) {
-                        return const Center(child: CircularProgressIndicator());
-                      }
-                      if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                        return const Center(child: Text('No trips found.', style: TextStyle(color: Colors.white70)));
-                      }
-                      return ListView.builder(
-                        controller: scrollController,
-                        itemCount: snapshot.data!.docs.length,
-                        itemBuilder: (context, index) {
-                          final data = snapshot.data!.docs[index].data() as Map<String, dynamic>;
-                          final distance = (data['distanceKm'] as num?)?.toStringAsFixed(2) ?? '0.00';
-                          final flags = data['flags'] ?? 0;
-                          final startTime = DateTime.tryParse(data['startTime'] ?? '')?.toLocal();
-                          final startStr = startTime != null ? '${startTime.hour}:${startTime.minute.toString().padLeft(2, '0')}' : 'N/A';
-                          
-                          return Card(
-                            color: const Color(0xFF0F172A),
-                            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                            child: ListTile(
-                              leading: const Icon(Icons.directions_car, color: Colors.blueAccent),
-                              title: Text('Trip ${data['date'] ?? ''} - $startStr', style: const TextStyle(color: Colors.white)),
-                              subtitle: Text('Distance: $distance km • Flags: $flags', style: const TextStyle(color: Colors.white70)),
-                            ),
-                          );
-                        },
-                      );
-                    },
-                  ),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
 
   void _toggleNavigation(LatLng? currentLoc, double heading) {
     setState(() {
@@ -415,9 +364,44 @@ class _MapScreenState extends State<MapScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (spot['image_url'] != null)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Image.network(spot['image_url'], headers: const {"ngrok-skip-browser-warning": "true"}, height: 200, width: double.infinity, fit: BoxFit.cover),
+              Builder(
+                builder: (context) {
+                  String displayUrl = spot['image_url'];
+                  if (displayUrl.startsWith('http')) {
+                    try {
+                      final uri = Uri.parse(displayUrl);
+                      if (uri.host.contains('ngrok-free.dev')) {
+                        displayUrl = '$GARBAGE_AI_URL${uri.path}';
+                      }
+                    } catch (_) {}
+                  } else if (displayUrl.startsWith('/')) {
+                    displayUrl = '$GARBAGE_AI_URL$displayUrl';
+                  } else {
+                    displayUrl = '$GARBAGE_AI_URL/$displayUrl';
+                  }
+                  
+                  return ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: SizedBox(
+                      width: 400,
+                      child: Image.network(
+                        displayUrl,
+                        headers: const {"ngrok-skip-browser-warning": "true"},
+                        height: 200,
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) {
+                          return Container(
+                            height: 200,
+                            color: Colors.black26,
+                            child: const Center(
+                              child: Icon(Icons.image_not_supported, color: Colors.white24, size: 50),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  );
+                }
               ),
             const SizedBox(height: 16),
             Text(
@@ -544,6 +528,10 @@ class _MapScreenState extends State<MapScreen> {
                 if (hasGesture && _isFollowingUser) {
                   setState(() => _isFollowingUser = false);
                 }
+                final isZoomedIn = position.zoom >= 16.5;
+                if (_isZoomedInForFlags != isZoomedIn) {
+                  setState(() => _isZoomedInForFlags = isZoomedIn);
+                }
               },
             ),
             children: [
@@ -614,7 +602,7 @@ class _MapScreenState extends State<MapScreen> {
                   }).toList(),
                 ),
                 
-              if (_trashSpots.isNotEmpty)
+              if (_trashSpots.isNotEmpty && _showFlags && _isZoomedInForFlags)
                 MarkerLayer(
                   markers: _trashSpots.map((spot) {
                     final lat = spot['lat'] as double;
@@ -681,6 +669,52 @@ class _MapScreenState extends State<MapScreen> {
             ],
           ),
           
+          if (_showSnapAnimation)
+            IgnorePointer(
+              child: Container(
+                color: Colors.white.withOpacity(0.3),
+              ),
+            ),
+          
+          // Settings Menu
+          Positioned(
+            top: 40,
+            right: 24,
+            child: PopupMenuButton<String>(
+              icon: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2))],
+                ),
+                child: const Icon(Icons.settings, color: Colors.blueAccent),
+              ),
+              onSelected: (value) {
+                if (value == 'toggle_flags') {
+                  setState(() {
+                    _showFlags = !_showFlags;
+                  });
+                }
+              },
+              itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+                PopupMenuItem<String>(
+                  value: 'toggle_flags',
+                  child: Row(
+                    children: [
+                      Icon(
+                        _showFlags ? Icons.visibility_off : Icons.visibility,
+                        color: Colors.blueAccent,
+                      ),
+                      const SizedBox(width: 12),
+                      Text(_showFlags ? 'Hide Flags' : 'Show Flags', style: const TextStyle(fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
           // Current Location Button
           Positioned(
             bottom: 210,
@@ -722,6 +756,7 @@ class _MapScreenState extends State<MapScreen> {
                     camera.toggleAutoCapture(
                       () => telemetry.currentPosition?.latitude ?? 42.3601,
                       () => telemetry.currentPosition?.longitude ?? -71.0589,
+                      onSnap: _triggerSnapAnimation,
                     );
                   },
                   backgroundColor: isCapturing ? Colors.redAccent : Colors.white,
@@ -734,17 +769,7 @@ class _MapScreenState extends State<MapScreen> {
             ),
           ),
           
-          // Trips Button
-          Positioned(
-            bottom: 420,
-            right: 24,
-            child: FloatingActionButton(
-              heroTag: 'trips_history',
-              onPressed: _showTripsDialog,
-              backgroundColor: Colors.indigoAccent,
-              child: const Icon(Icons.history_rounded, color: Colors.white),
-            ),
-          ),
+
           
           // Navigation UI Overlay
           Positioned(

@@ -1,0 +1,7 @@
+path: E:/AImodel/Garbage_Combined_Dataset
+train: train/images
+val: valid/images
+test: test/images
+
+nc: 7
+names: ['Garbage', 'Pothole', 'Debris', 'Abandoned Vehicle', 'Clean Road', 'Slightly Dirty Road', 'Very Dirty Road']
