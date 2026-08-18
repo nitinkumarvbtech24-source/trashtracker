@@ -23,11 +23,15 @@ class CameraService extends ChangeNotifier {
   Timer? _snapshotTimer;
   Timer? _healthCheckTimer;
 
-  bool _isBackendConnected = false;
-  bool get isBackendConnected => _isBackendConnected;
+  bool _isGarbageConnected = false;
+  bool _isHealthConnected = false;
+  bool get isGarbageConnected => _isGarbageConnected;
+  bool get isHealthConnected => _isHealthConnected;
 
-  String _latestRoadStatus = 'UNKNOWN';
-  String get latestRoadStatus => _latestRoadStatus;
+  String _latestGarbageStatus = 'UNKNOWN';
+  Map<String, dynamic>? latestResult;
+  String _latestHealthStatus = 'UNKNOWN';
+  String get latestRoadStatus => _latestGarbageStatus;
 
   // Analytics State
   int _imagesCapturedToday = 0;
@@ -63,7 +67,9 @@ class CameraService extends ChangeNotifier {
       captureManualSnapshot(getLat(), getLng(), sessionId: _currentSessionId, pointType: 'end');
       _isAutoCapturing = false;
       _currentSessionId = null;
-      _latestRoadStatus = 'UNKNOWN';
+      _latestGarbageStatus = 'UNKNOWN';
+      _latestHealthStatus = 'UNKNOWN';
+      latestResult = null;
       notifyListeners();
     } else {
       if (!isInitialized) {
@@ -135,18 +141,29 @@ class CameraService extends ChangeNotifier {
 
   Future<void> _checkHealth() async {
     try {
-      final response = await http.get(
-        Uri.parse('$GARBAGE_AI_URL/api/snapshots'),
-        headers: {'ngrok-skip-browser-warning': 'true'}
-      ).timeout(const Duration(seconds: 3));
-      final connected = response.statusCode == 200;
-      if (_isBackendConnected != connected) {
-        _isBackendConnected = connected;
+      final resG = await http.get(Uri.parse('$GARBAGE_AI_URL/api/snapshots'), headers: {'ngrok-skip-browser-warning': 'true'}).timeout(const Duration(seconds: 3));
+      final gConn = resG.statusCode == 200;
+      if (_isGarbageConnected != gConn) {
+        _isGarbageConnected = gConn;
         notifyListeners();
       }
     } catch (e) {
-      if (_isBackendConnected) {
-        _isBackendConnected = false;
+      if (_isGarbageConnected) {
+        _isGarbageConnected = false;
+        notifyListeners();
+      }
+    }
+    
+    try {
+      final resH = await http.get(Uri.parse('$HEALTH_AI_URL/api/snapshots'), headers: {'ngrok-skip-browser-warning': 'true'}).timeout(const Duration(seconds: 3));
+      final hConn = resH.statusCode == 200;
+      if (_isHealthConnected != hConn) {
+        _isHealthConnected = hConn;
+        notifyListeners();
+      }
+    } catch (e) {
+      if (_isHealthConnected) {
+        _isHealthConnected = false;
         notifyListeners();
       }
     }
@@ -232,8 +249,8 @@ class CameraService extends ChangeNotifier {
         ).timeout(const Duration(seconds: 30));
 
         if (garbageResponse.statusCode == 200) {
-          if (!_isBackendConnected) {
-            _isBackendConnected = true;
+          if (!_isGarbageConnected) {
+            _isGarbageConnected = true;
             notifyListeners();
           }
           final resBody = json.decode(garbageResponse.body);
@@ -241,8 +258,8 @@ class CameraService extends ChangeNotifier {
           final confidence = resBody['road_confidence'] ?? 0.0;
           final imageUrl = resBody['image_url'];
           
-          if (_latestRoadStatus != roadStatus) {
-            _latestRoadStatus = roadStatus;
+          if (_latestGarbageStatus != roadStatus) {
+            _latestGarbageStatus = roadStatus;
             notifyListeners();
           }
 
@@ -290,12 +307,71 @@ class CameraService extends ChangeNotifier {
         }
       } catch (e) {
         debugPrint("Garbage AI Error: $e");
-        if (_isBackendConnected) {
-          _isBackendConnected = false;
+        if (_isGarbageConnected) {
+          _isGarbageConnected = false;
           notifyListeners();
         }
       }
 
+      // 2. Send to Health AI
+      try {
+        final healthResponse = await http.post(
+          Uri.parse('$HEALTH_AI_URL/process_frame'),
+          headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+          body: json.encode({
+            'image': 'data:image/jpeg;base64,$base64Image',
+            'lat': lat,
+            'lng': lng,
+            'vehicle_number': vehicleNumber,
+            'ward': ward,
+            if (sessionId != null) 'session_id': sessionId,
+            if (pointType != null) 'point_type': pointType
+          }),
+        ).timeout(const Duration(seconds: 30));
+
+        if (healthResponse.statusCode == 200) {
+          if (!_isHealthConnected) {
+            _isHealthConnected = true;
+            notifyListeners();
+          }
+          final resBody = json.decode(healthResponse.body);
+          final roadStatus = resBody['road_status'] ?? 'UNKNOWN';
+          final imageUrl = resBody['image_url'];
+          
+          if (_latestHealthStatus != roadStatus) {
+            _latestHealthStatus = roadStatus;
+            notifyListeners();
+          }
+
+          combinedResult['health'] = {
+            'road_status': roadStatus,
+          };
+
+          if (imageUrl != null) {
+            if (roadStatus == 'Pothole Detected' || roadStatus == 'Bad Road') {
+              try {
+                await FirebaseFirestore.instance.collection('health_spots').add({
+                  'lat': lat,
+                  'lng': lng,
+                  'road_status': roadStatus,
+                  'image_url': imageUrl,
+                  'timestamp': FieldValue.serverTimestamp(),
+                  'vehicle_number': vehicleNumber,
+                  'ward': ward,
+                  'status': 'Flagged',
+                  'zone': prefs.getString('assignedZone') ?? 'Unknown Zone',
+                });
+              } catch (e) {
+                debugPrint("Error saving to Firestore: $e");
+              }
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint("Health AI Error: $e");
+      }
+
+      latestResult = combinedResult;
       return combinedResult;
     } catch (e) {
       debugPrint("Error taking snapshot: $e");
@@ -310,7 +386,9 @@ class CameraService extends ChangeNotifier {
       final file = await _controller!.stopVideoRecording();
       DatabaseService().insertVideoChunk(file.path, DateTime.now().millisecondsSinceEpoch);
       _isRecording = false;
-      _latestRoadStatus = 'UNKNOWN';
+      _latestGarbageStatus = 'UNKNOWN';
+      _latestHealthStatus = 'UNKNOWN';
+      latestResult = null;
       notifyListeners();
     } catch (e) {
       debugPrint("Error stopping recording: $e");
