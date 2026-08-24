@@ -1,5 +1,19 @@
 [
     {
+        "filename": "5cf96379e5a049e4a8531c77ad7906b8.jpg",
+        "image_url": "/images/Very_Dirty/5cf96379e5a049e4a8531c77ad7906b8.jpg",
+        "class": "Very_Dirty",
+        "display_class": "Very Dirty Road",
+        "confidence": 0.9478124976158142,
+        "timestamp": "2026-08-24 10:22:02",
+        "lat": 12.922674,
+        "lng": 77.5001809,
+        "vehicle_number": "ka 01 aa 0002",
+        "ward": "Unassigned",
+        "session_id": null,
+        "point_type": null
+    },
+    {
         "filename": "037e51c7faf24fb2b226c937f3f0ac2a.jpg",
         "image_url": "/images/Slightly_Dirty/037e51c7faf24fb2b226c937f3f0ac2a.jpg",
         "class": "Slightly_Dirty",

@@ -4,6 +4,17 @@
         {
             "vehicle_number": "ka 01 aa 0002",
             "ward": "Unassigned",
+            "lat": 12.922674,
+            "lng": 77.5001809,
+            "display_class": "Bad Road",
+            "road_status": "Bad Road",
+            "confidence": 1.0,
+            "image_url": "/detections/event_1787547127.jpg",
+            "timestamp": "event_1787547127"
+        },
+        {
+            "vehicle_number": "ka 01 aa 0002",
+            "ward": "Unassigned",
             "lat": 12.9220343,
             "lng": 77.5023802,
             "display_class": "Pothole Detected",
