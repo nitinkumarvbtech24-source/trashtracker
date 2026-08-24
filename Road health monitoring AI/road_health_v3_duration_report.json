@@ -1,0 +1,10 @@
+{
+  "start_timestamp": "2026-08-16T00:30:53.618634",
+  "end_timestamp": "2026-08-16T02:07:16.576891",
+  "total_duration_seconds": 5782.96,
+  "total_duration_hours": 1.6064,
+  "epochs_completed": 35,
+  "batch_size": 16,
+  "image_size": 416,
+  "model_architecture": "YOLOv8n"
+}

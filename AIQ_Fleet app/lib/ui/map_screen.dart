@@ -11,6 +11,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../services/camera_service.dart';
 import '../constants.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 class TrailSegment {
   final LatLng start;
@@ -270,9 +271,13 @@ class _MapScreenState extends State<MapScreen> {
     // Update telemetry state so it syncs to Firebase
     context.read<TelemetryService>().setNavigating(_isNavigating);
 
-    if (_isNavigating && currentLoc != null) {
-      _mapController.moveAndRotate(currentLoc, 18.0, heading);
+    if (_isNavigating) {
+      WakelockPlus.enable();
+      if (currentLoc != null) {
+        _mapController.moveAndRotate(currentLoc, 18.0, heading);
+      }
     } else {
+      WakelockPlus.disable();
       _mapController.rotate(0);
     }
   }

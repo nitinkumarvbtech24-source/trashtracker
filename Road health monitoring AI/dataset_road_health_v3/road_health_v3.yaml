@@ -1,0 +1,7 @@
+path: E:/nitin/pradwjal/trashtracker-main/Roadhealthiness_ai model/modelssync-main/dataset_road_health_v3
+train: train/images
+val: valid/images
+test: test/images
+
+nc: 10
+names: ['not a road', 'good road', 'bad road', 'pothole', 'damaged', 'debris', 'muddy', 'obstruction', 'big', 'small']

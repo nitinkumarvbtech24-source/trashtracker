@@ -1,0 +1,244 @@
+void _showNameWardDialog() {
+
+    if (_drawingPoints.length < 3) {
+
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('A ward must have at least 3 points.')));
+
+      return;
+
+    }
+
+
+
+    final nameController = TextEditingController();
+
+    if (_editingWardId != null) {
+
+      final existingWard = _wards.where((w) => w.id == _editingWardId).firstOrNull;
+
+      if (existingWard != null) {
+
+        nameController.text = existingWard.name;
+
+      }
+
+    }
+
+
+
+    showDialog(
+
+      context: context,
+
+      builder: (context) => AlertDialog(
+
+        backgroundColor: const Color(0xFF161E2E),
+
+        title: Text(_editingWardId != null ? 'Update Ward' : 'Save Ward', style: const TextStyle(color: Colors.white)),
+
+        content: TextField(
+
+          controller: nameController,
+
+          style: const TextStyle(color: Colors.white),
+
+          decoration: const InputDecoration(
+
+            labelText: 'Ward Name',
+
+            labelStyle: TextStyle(color: Color(0xFF94A3B8)),
+
+          ),
+
+        ),
+
+        actions: [
+
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+
+          ElevatedButton(
+
+            onPressed: () async {
+
+              if (nameController.text.isNotEmpty) {
+
+                final newWard = Ward(
+
+                  id: _editingWardId ?? DateTime.now().millisecondsSinceEpoch.toString(),
+
+                  name: nameController.text,
+
+                  boundary: List.from(_drawingPoints),
+
+                );
+
+                
+
+                try {
+
+                  await FirebaseFirestore.instance.collection('wards').doc(newWard.id).set(newWard.toJson());
+
+                  if (mounted) {
+
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_editingWardId != null ? 'Ward updated successfully!' : 'Ward saved successfully!')));
+
+                    setState(() {
+
+                      _currentMode = MapMode.view;
+
+                      _drawingPoints.clear();
+
+                      _selectedWard = newWard;
+
+                      _editingWardId = null;
+
+                    });
+
+                    Navigator.pop(context);
+
+                  }
+
+                } catch (e) {
+
+                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to save Ward: $e')));
+
+                }
+
+              }
+
+            },
+
+            child: Text(_editingWardId != null ? 'Update' : 'Save'),
+
+          )
+
+        ],
+
+      )
+
+    );
+
+  }
+
+void _showNameZoneDialog() {
+
+    if (_drawingPoints.length < 3) {
+
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('A zone must have at least 3 points.')));
+
+      return;
+
+    }
+
+
+
+    final nameController = TextEditingController();
+
+    if (_editingZoneId != null) {
+
+      final existingZone = _zones.where((z) => z.id == _editingZoneId).firstOrNull;
+
+      if (existingZone != null) {
+
+        nameController.text = existingZone.name;
+
+      }
+
+    }
+
+
+
+    showDialog(
+
+      context: context,
+
+      builder: (context) => AlertDialog(
+
+        backgroundColor: const Color(0xFF161E2E),
+
+        title: Text(_editingZoneId != null ? 'Update Zone' : 'Save Zone', style: const TextStyle(color: Colors.white)),
+
+        content: TextField(
+
+          controller: nameController,
+
+          style: const TextStyle(color: Colors.white),
+
+          decoration: const InputDecoration(
+
+            labelText: 'Zone Name',
+
+            labelStyle: TextStyle(color: Color(0xFF94A3B8)),
+
+          ),
+
+        ),
+
+        actions: [
+
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+
+          ElevatedButton(
+
+            onPressed: () async {
+
+              if (nameController.text.isNotEmpty) {
+
+                final newZone = Zone(
+
+                  id: _editingZoneId ?? DateTime.now().millisecondsSinceEpoch.toString(),
+
+                  name: nameController.text,
+
+                  boundary: List.from(_drawingPoints),
+
+                );
+
+                
+
+                try {
+
+                  await FirebaseFirestore.instance.collection('zones').doc(newZone.id).set(newZone.toJson());
+
+                  if (mounted) {
+
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_editingZoneId != null ? 'Zone updated successfully!' : 'Zone saved successfully!')));
+
+                    setState(() {
+
+                      _currentMode = MapMode.view;
+
+                      _drawingPoints.clear();
+
+                      _selectedZone = newZone;
+
+                      _editingZoneId = null;
+
+                    });
+
+                    Navigator.pop(context);
+
+                  }
+
+                } catch (e) {
+
+                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to save Zone: $e')));
+
+                }
+
+              }
+
+            },
+
+            child: Text(_editingZoneId != null ? 'Update' : 'Save'),
+
+          )
+
+        ],
+
+      )
+
+    );
+
+  }
+
