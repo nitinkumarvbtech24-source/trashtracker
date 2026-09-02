@@ -7,8 +7,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:uuid/uuid.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:gal/gal.dart';
 import 'database_service.dart';
 import '../constants.dart';
+import 'wake_manager.dart';
 
 class CameraService extends ChangeNotifier {
   static final CameraService _instance = CameraService._internal();
@@ -51,13 +56,72 @@ class CameraService extends ChangeNotifier {
   bool get isAutoCapturing => _isAutoCapturing;
   double get intervalSeconds => _intervalSeconds;
 
+  // Training Mode State
+  bool _isTrainingMode = false;
+  bool _isTrainingCapturing = false;
+  bool _isTrainingAutoMode = true; // New state for auto/manual training
+  double _trainingIntervalSeconds = 1.0;
+  Timer? _trainingCaptureTimer;
+
+  bool get isTrainingMode => _isTrainingMode;
+  bool get isTrainingCapturing => _isTrainingCapturing;
+  bool get isTrainingAutoMode => _isTrainingAutoMode;
+  double get trainingIntervalSeconds => _trainingIntervalSeconds;
+
+  double _minZoomLevel = 1.0;
+  double _maxZoomLevel = 1.0;
+  
+  List<double> get supportedZoomLevels {
+    return [0.5, 1.0, 2.0];
+  }
+
+  String _aspectRatioMode = 'Full';
+  String get aspectRatioMode => _aspectRatioMode;
+
+  void setAspectRatioMode(String mode) {
+    _aspectRatioMode = mode;
+    notifyListeners();
+  }
+
   void setAutoMode(bool value) {
     _isAutoMode = value;
+    if (value) {
+      _isTrainingMode = false;
+      if (_isTrainingCapturing) toggleTrainingCapture(() => 0.0, () => 0.0); // Stop training capture if switching
+    }
+    WakeManager.update();
     notifyListeners();
   }
 
   void setIntervalSeconds(double value) {
     _intervalSeconds = value;
+    notifyListeners();
+  }
+
+  void setTrainingMode(bool value) {
+    _isTrainingMode = value;
+    if (value) {
+      _isAutoMode = false;
+      if (_isAutoCapturing) toggleAutoCapture(() => 0.0, () => 0.0); // Stop auto capture if switching
+    }
+    WakeManager.update();
+    notifyListeners();
+  }
+
+  void setTrainingIntervalSeconds(double value) {
+    _trainingIntervalSeconds = value;
+    notifyListeners();
+  }
+
+  Future<void> setTrainingAutoMode(bool value) async {
+    _isTrainingAutoMode = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('trainingAutoMode', value);
+    if (!value && _isTrainingCapturing) {
+      _trainingCaptureTimer?.cancel();
+      _isTrainingCapturing = false;
+    }
+    WakeManager.update();
     notifyListeners();
   }
 
@@ -70,6 +134,7 @@ class CameraService extends ChangeNotifier {
       _latestGarbageStatus = 'UNKNOWN';
       _latestHealthStatus = 'UNKNOWN';
       latestResult = null;
+      WakeManager.update();
       notifyListeners();
     } else {
       if (!isInitialized) {
@@ -78,6 +143,7 @@ class CameraService extends ChangeNotifier {
       
       _isAutoCapturing = true;
       _currentSessionId = const Uuid().v4();
+      WakeManager.update();
       notifyListeners();
       
       captureManualSnapshot(getLat(), getLng(), sessionId: _currentSessionId, pointType: 'start');
@@ -93,6 +159,167 @@ class CameraService extends ChangeNotifier {
     }
   }
 
+  Future<void> toggleTrainingCapture(double Function() getLat, double Function() getLng, {VoidCallback? onSnap}) async {
+    if (_isTrainingCapturing) {
+      _trainingCaptureTimer?.cancel();
+      _isTrainingCapturing = false;
+      WakeManager.update();
+      notifyListeners();
+    } else {
+      if (!isInitialized) {
+        await initialize();
+      }
+      
+      _isTrainingCapturing = true;
+      WakeManager.update();
+      notifyListeners();
+      
+      _captureTrainingSnapshot(getLat(), getLng());
+      if (onSnap != null) onSnap();
+
+      // Only start timer if auto mode
+      if (_isTrainingAutoMode) {
+        _trainingCaptureTimer = Timer.periodic(
+          Duration(milliseconds: (_trainingIntervalSeconds * 1000).toInt()),
+          (timer) {
+            _captureTrainingSnapshot(getLat(), getLng());
+            if (onSnap != null) onSnap();
+          },
+        );
+      } else {
+        // If manual mode, it's just a single shot, so we turn off capturing immediately
+        _isTrainingCapturing = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<void> _captureTrainingSnapshot(double lat, double lng) async {
+    try {
+      if (_controller == null || !_controller!.value.isInitialized) return;
+      
+      final XFile picture = await _controller!.takePicture();
+
+      final prefs = await SharedPreferences.getInstance();
+      final vehicleNumber = prefs.getString('vehicleNumber') ?? 'UnknownVehicle';
+      final driverName = prefs.getString('driverName') ?? 'UnknownDriver';
+      
+      final now = DateTime.now();
+      final dateStr = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+      final timestamp = now.millisecondsSinceEpoch.toString();
+      final fileName = "$timestamp.jpg";
+
+      final folderName = "${vehicleNumber}_$driverName";
+
+      // ALWAYS save locally first
+      final directory = await getApplicationDocumentsDirectory();
+      final trainingDir = Directory('${directory.path}/pending_training_images/$folderName/$dateStr');
+      if (!await trainingDir.exists()) {
+        await trainingDir.create(recursive: true);
+      }
+      final localFile = File('${trainingDir.path}/$fileName');
+      await localFile.writeAsBytes(await picture.readAsBytes());
+      
+      // Save to device gallery using gal package
+      try {
+        final hasAccess = await Gal.hasAccess(toAlbum: true);
+        if (!hasAccess) {
+          await Gal.requestAccess(toAlbum: true);
+        }
+        await Gal.putImage(localFile.path, album: 'AIQ_Fleet_$dateStr');
+      } catch (e) {
+        debugPrint("Error saving to device gallery: $e");
+      }
+      
+      // Save metadata locally to know where it was captured
+      final metaFile = File('${trainingDir.path}/$timestamp.json');
+      await metaFile.writeAsString(jsonEncode({
+        'lat': lat,
+        'lng': lng,
+        'vehicle_number': vehicleNumber,
+        'driver_name': driverName,
+      }));
+
+      // Try uploading asynchronously
+      _syncPendingTrainingImages();
+
+    } catch (e) {
+      debugPrint("Error taking training snapshot: $e");
+    }
+  }
+
+  bool _isSyncingTraining = false;
+  Future<void> _syncPendingTrainingImages() async {
+    if (_isSyncingTraining) return;
+    _isSyncingTraining = true;
+    try {
+      final directory = await getApplicationDocumentsDirectory();
+      final pendingDir = Directory('${directory.path}/pending_training_images');
+      if (!await pendingDir.exists()) {
+        _isSyncingTraining = false;
+        return;
+      }
+
+      final entities = await pendingDir.list(recursive: true).toList();
+      final imageFiles = entities.whereType<File>().where((e) => e.path.endsWith('.jpg')).toList();
+
+      for (var imageFile in imageFiles) {
+        try {
+          final bytes = await imageFile.readAsBytes();
+          final base64Image = base64Encode(bytes);
+
+          final pathParts = imageFile.path.split(Platform.pathSeparator);
+          final fileName = pathParts.last;
+          final dateStr = pathParts[pathParts.length - 2];
+          final folderName = pathParts[pathParts.length - 3];
+          final metaFileName = fileName.replaceAll('.jpg', '.json');
+          final metaFile = File(imageFile.parent.path + Platform.pathSeparator + metaFileName);
+
+          Map<String, dynamic> metadata = {};
+          if (await metaFile.exists()) {
+            metadata = jsonDecode(await metaFile.readAsString());
+          }
+
+          final response = await http.post(
+            Uri.parse('$GARBAGE_AI_URL/upload_training'),
+            headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+            body: json.encode({
+              'image': 'data:image/jpeg;base64,$base64Image',
+              'vehicle_number': metadata['vehicle_number'] ?? 'Unknown',
+              'driver_name': metadata['driver_name'] ?? 'Unknown',
+            }),
+          ).timeout(const Duration(seconds: 15));
+
+          if (response.statusCode == 200) {
+            final resBody = json.decode(response.body);
+            final serverImageUrl = resBody['image_url'];
+
+            await FirebaseFirestore.instance.collection('training_data').add({
+              'folder_name': folderName,
+              'date': dateStr,
+              'image_url': '$GARBAGE_AI_URL$serverImageUrl',
+              'timestamp': FieldValue.serverTimestamp(),
+              'lat': metadata['lat'] ?? 0.0,
+              'lng': metadata['lng'] ?? 0.0,
+              'vehicle_number': metadata['vehicle_number'] ?? 'Unknown',
+              'driver_name': metadata['driver_name'] ?? 'Unknown',
+            });
+
+            await imageFile.delete();
+            if (await metaFile.exists()) {
+              await metaFile.delete();
+            }
+          }
+        } catch (e) {
+          debugPrint("Sync error for ${imageFile.path}: $e");
+        }
+      }
+    } catch (e) {
+      debugPrint("Error syncing training images: $e");
+    }
+    _isSyncingTraining = false;
+  }
+
   CameraController? get controller => _controller;
   bool get isRecording => _isRecording;
   bool get isInitialized => _controller != null && _controller!.value.isInitialized;
@@ -100,6 +327,9 @@ class CameraService extends ChangeNotifier {
 
   Future<void> initialize() async {
     try {
+      final prefs = await SharedPreferences.getInstance();
+      _isTrainingAutoMode = prefs.getBool('trainingAutoMode') ?? true;
+
       startHealthCheck();
       errorMessage = null;
       _cameras = await availableCameras();
@@ -120,11 +350,15 @@ class CameraService extends ChangeNotifier {
     try {
       _controller = CameraController(
         description,
-        ResolutionPreset.medium,
+        ResolutionPreset.high,
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.jpeg,
       );
+
       await _controller!.initialize();
+      _minZoomLevel = await _controller!.getMinZoomLevel();
+      _maxZoomLevel = await _controller!.getMaxZoomLevel();
+      
       notifyListeners();
     } catch (e) {
       errorMessage = e.toString();
@@ -402,6 +636,7 @@ class CameraService extends ChangeNotifier {
     _snapshotTimer?.cancel();
     _healthCheckTimer?.cancel();
     _autoCaptureTimer?.cancel();
+    _trainingCaptureTimer?.cancel();
     super.dispose();
   }
 }

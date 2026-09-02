@@ -610,12 +610,10 @@ def process_frame_route():
         }
         
         recent_snapshots.insert(0, snapshot)
-        if len(recent_snapshots) > 50:
-            oldest = recent_snapshots.pop()
-            try:
-                os.remove(os.path.join("static/images", oldest["class"], oldest["filename"]))
-            except:
-                pass
+        try:
+            os.remove(os.path.join("static/images", oldest["class"], oldest["filename"]))
+        except:
+            pass
         
         save_db(recent_snapshots)
         
@@ -630,6 +628,47 @@ def process_frame_route():
     except Exception as e:
         print(f"Error processing frame: {e}")
         return jsonify({"error": str(e)}), 500
+
+@app.route('/upload_training', methods=['POST'])
+def upload_training():
+    try:
+        data = request.json
+        image_data = data['image']
+        vehicle_number = data.get('vehicle_number', 'Unknown')
+        driver_name = data.get('driver_name', 'Unknown')
+        
+        folder_name = f"{vehicle_number}_{driver_name}"
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        timestamp = datetime.now().strftime("%H%M%S") + "_" + uuid.uuid4().hex[:6]
+        filename = f"{timestamp}.jpg"
+        
+        # Save image
+        image_b64 = image_data.split(',')[1] if ',' in image_data else image_data
+        image_bytes = base64.b64decode(image_b64)
+        
+        save_dir = os.path.join("static", "training_images", folder_name, date_str)
+        os.makedirs(save_dir, exist_ok=True)
+        filepath = os.path.join(save_dir, filename)
+        
+        with open(filepath, "wb") as f:
+            f.write(image_bytes)
+            
+        image_url = f"/training_images/{folder_name}/{date_str}/{filename}"
+        
+        return jsonify({
+            "success": True,
+            "image_url": image_url,
+            "folder_name": folder_name,
+            "date": date_str
+        })
+    except Exception as e:
+        print(f"Error uploading training image: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/training_images/<path:filename>')
+@cross_origin()
+def serve_training_image(filename):
+    return send_from_directory('static/training_images', filename)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5001, debug=False)

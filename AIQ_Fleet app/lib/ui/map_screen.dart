@@ -11,7 +11,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../services/camera_service.dart';
 import '../constants.dart';
-import 'package:wakelock_plus/wakelock_plus.dart';
+import 'route_assigner_screen.dart';
 
 class TrailSegment {
   final LatLng start;
@@ -61,11 +61,13 @@ class _MapScreenState extends State<MapScreen> {
   LatLng? _lastKnownPosition;
   Set<int> _completedCheckpoints = {};
   
-  // Trash Spots State
   List<Map<String, dynamic>> _trashSpots = [];
   StreamSubscription<QuerySnapshot>? _trashSub;
   bool _showFlags = true;
   bool _isZoomedInForFlags = false; // Zoom >= 16.5
+
+  bool _allowRouteAssignment = false;
+  StreamSubscription<DocumentSnapshot>? _permissionsSub;
 
   bool _showSnapAnimation = false;
 
@@ -242,12 +244,25 @@ class _MapScreenState extends State<MapScreen> {
         });
       }
     });
+
+    _permissionsSub = FirebaseFirestore.instance
+        .collection('settings')
+        .doc('fleet_permissions')
+        .snapshots()
+        .listen((snapshot) {
+      if (mounted && snapshot.exists && snapshot.data() != null) {
+        setState(() {
+          _allowRouteAssignment = snapshot.data()!['allowRouteAssignment'] ?? false;
+        });
+      }
+    });
   }
 
   @override
   void dispose() {
     _routeSub?.cancel();
     _trashSub?.cancel();
+    _permissionsSub?.cancel();
     super.dispose();
   }
   
@@ -272,12 +287,10 @@ class _MapScreenState extends State<MapScreen> {
     context.read<TelemetryService>().setNavigating(_isNavigating);
 
     if (_isNavigating) {
-      WakelockPlus.enable();
       if (currentLoc != null) {
         _mapController.moveAndRotate(currentLoc, 18.0, heading);
       }
     } else {
-      WakelockPlus.disable();
       _mapController.rotate(0);
     }
   }
@@ -700,6 +713,8 @@ class _MapScreenState extends State<MapScreen> {
                   setState(() {
                     _showFlags = !_showFlags;
                   });
+                } else if (value == 'route_assigner') {
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const RouteAssignerScreen()));
                 }
               },
               itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
@@ -716,6 +731,20 @@ class _MapScreenState extends State<MapScreen> {
                     ],
                   ),
                 ),
+                if (_allowRouteAssignment)
+                  PopupMenuItem<String>(
+                    value: 'route_assigner',
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.edit_road_rounded,
+                          color: Colors.orangeAccent,
+                        ),
+                        const SizedBox(width: 12),
+                        const Text('Route Assign Mode', style: TextStyle(fontWeight: FontWeight.w600)),
+                      ],
+                    ),
+                  ),
               ],
             ),
           ),

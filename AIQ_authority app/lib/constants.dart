@@ -13,7 +13,7 @@ String get activeGarbageAiUrl {
 }
 
 String get activeHealthAiUrl {
-  return "https://pointer-staff-prodigy.ngrok-free.dev/health_api";
+  return HEALTH_AI_URL;
 }
 
 // Keeping for backward compatibility temporarily if needed

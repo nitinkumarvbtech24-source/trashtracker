@@ -198,9 +198,6 @@ async def process_frame_route(request: Request, background_tasks: BackgroundTask
             "timestamp": filename_only.replace('.jpg', '')
         }
         recent_snapshots.insert(0, snapshot_data)
-        if len(recent_snapshots) > 100:
-            recent_snapshots.pop()
-
         save_db(recent_potholes, recent_snapshots)
 
         return JSONResponse(status_code=200, content={
