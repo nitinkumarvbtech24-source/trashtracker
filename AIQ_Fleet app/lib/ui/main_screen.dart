@@ -134,6 +134,7 @@ class _MainScreenState extends State<MainScreen> {
             index: _currentIndex,
             children: _screens,
           ),
+
         ],
       ),
       bottomNavigationBar: SafeArea(

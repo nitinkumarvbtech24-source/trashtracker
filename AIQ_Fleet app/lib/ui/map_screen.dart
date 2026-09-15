@@ -102,8 +102,8 @@ class _MapScreenState extends State<MapScreen> {
       if (_lastRecordedPosition != null) {
         final distance = const Distance().as(LengthUnit.Meter, _lastRecordedPosition!, currentLoc);
         
-        // Add a segment if moved more than 5 meters to improve tracing accuracy
-        if (distance > 5.0) {
+        // Add a segment if moved more than 50 meters to improve tracing accuracy and prevent API rate-limits
+        if (distance > 50.0) {
           final cameraService = context.read<CameraService>();
           final status = cameraService.latestRoadStatus;
           
@@ -696,7 +696,7 @@ class _MapScreenState extends State<MapScreen> {
           
           // Settings Menu
           Positioned(
-            top: 40,
+            top: 120,
             right: 24,
             child: PopupMenuButton<String>(
               icon: Container(

@@ -21,6 +21,7 @@ class TelemetryService extends ChangeNotifier {
   // Analytics State
   double _totalDistanceMeters = 0.0;
   List<Map<String, dynamic>> _dailyRoute = [];
+  DateTime? _lastFirestoreWrite;
   String get _todayDateString => DateTime.now().toIso8601String().split('T')[0];
 
   // Trip State
@@ -119,27 +120,23 @@ class TelemetryService extends ChangeNotifier {
         distanceFilter: 5,
         forceLocationManager: true,
         intervalDuration: const Duration(seconds: 1),
-        foregroundNotificationConfig: const ForegroundNotificationConfig(
-          notificationText: "Street AIQ is continuing to receive your location in the background.",
-          notificationTitle: "Active Navigation",
-          enableWakeLock: true,
-        )
       );
     } else if (defaultTargetPlatform == TargetPlatform.iOS || defaultTargetPlatform == TargetPlatform.macOS) {
       locationSettings = AppleSettings(
         accuracy: LocationAccuracy.high,
         activityType: ActivityType.fitness,
-        distanceFilter: 5,
+        distanceFilter: 0,
         pauseLocationUpdatesAutomatically: true,
         showBackgroundLocationIndicator: true,
       );
     } else {
       locationSettings = const LocationSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 5,
+        distanceFilter: 0,
       );
     }
 
+    _positionStream?.cancel(); // Fix memory leak causing crashes
     _positionStream = Geolocator.getPositionStream(
       locationSettings: locationSettings,
     ).listen((Position position) {
@@ -178,28 +175,36 @@ class TelemetryService extends ChangeNotifier {
         position.timestamp.millisecondsSinceEpoch,
       );
       
-      // Push live tracking and daily stats to Firestore
-      final auth = AuthService();
-      if (auth.isLoggedIn && auth.vehicleNumber != null) {
-        final db = FirebaseFirestore.instance;
-        
-        db.collection('live_tracking').doc(auth.vehicleNumber).set({
-          'lat': position.latitude,
-          'lng': position.longitude,
-          'speed': position.speed,
-          'timestamp': FieldValue.serverTimestamp(),
-          'isActive': _isNavigating,
-        }, SetOptions(merge: true));
+      // Push live tracking and daily stats to Firestore throttled (every 5 seconds)
+      final now = DateTime.now();
+      if (_lastFirestoreWrite == null || now.difference(_lastFirestoreWrite!).inSeconds >= 5) {
+        _lastFirestoreWrite = now;
 
-        // Sync daily stats periodically (every time location updates)
-        if (_isNavigating) {
-          db.collection('vehicles').doc(auth.vehicleNumber!)
-            .collection('daily_stats').doc(_todayDateString)
-            .set({
-              'distance_km': _totalDistanceMeters / 1000.0,
-              'route': _dailyRoute,
-              'last_updated': FieldValue.serverTimestamp(),
-            }, SetOptions(merge: true));
+        final auth = AuthService();
+        if (auth.isLoggedIn && auth.vehicleNumber != null) {
+          final db = FirebaseFirestore.instance;
+          
+          db.collection('live_tracking').doc(auth.vehicleNumber).set({
+            'lat': position.latitude,
+            'lng': position.longitude,
+            'speed': position.speed,
+            'timestamp': FieldValue.serverTimestamp(),
+            'isActive': _isNavigating,
+          }, SetOptions(merge: true));
+
+          if (_isNavigating) {
+            db.collection('vehicles').doc(auth.vehicleNumber!)
+              .collection('daily_stats').doc(_todayDateString)
+              .set({
+                'distance_km': _totalDistanceMeters / 1000.0,
+                'route': FieldValue.arrayUnion([{
+                  'lat': position.latitude,
+                  'lng': position.longitude,
+                  'timestamp': position.timestamp.millisecondsSinceEpoch,
+                }]),
+                'last_updated': FieldValue.serverTimestamp(),
+              }, SetOptions(merge: true));
+          }
         }
       }
       

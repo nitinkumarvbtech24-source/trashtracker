@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:gal/gal.dart';
 import 'database_service.dart';
+import 'telemetry_service.dart';
 import '../constants.dart';
 import 'wake_manager.dart';
 
@@ -54,7 +55,53 @@ class CameraService extends ChangeNotifier {
 
   bool get isAutoMode => _isAutoMode;
   bool get isAutoCapturing => _isAutoCapturing;
-  double get intervalSeconds => _intervalSeconds;
+  double get intervalSeconds => _intervalSeconds; // Legacy, but kept for fallback/UI if needed
+  
+  // Dynamic Speed Rules
+  bool _isDynamicSpeedEnabled = false;
+  bool get isDynamicSpeedEnabled => _isDynamicSpeedEnabled;
+  List<Map<String, dynamic>> _speedRules = [];
+  List<Map<String, dynamic>> get speedRules => _speedRules;
+  double _accumulatedTime = 0.0;
+
+  Future<void> loadSpeedRules() async {
+    final prefs = await SharedPreferences.getInstance();
+    _isDynamicSpeedEnabled = prefs.getBool('isDynamicSpeedEnabled') ?? false;
+    final rulesStr = prefs.getString('speedRules');
+    if (rulesStr != null) {
+      try {
+        final List<dynamic> decoded = jsonDecode(rulesStr);
+        _speedRules = decoded.map((e) => Map<String, dynamic>.from(e)).toList();
+      } catch (e) {
+        _setDefaultRules();
+      }
+    } else {
+      _setDefaultRules();
+    }
+    notifyListeners();
+  }
+
+  void _setDefaultRules() {
+    _speedRules = [
+      {'min': 0.0, 'max': 2.0, 'interval': 0.0}, // 0 means Paused
+      {'min': 2.0, 'max': 30.0, 'interval': 5.0},
+      {'min': 30.0, 'max': 150.0, 'interval': 2.0},
+    ];
+  }
+
+  Future<void> updateSpeedRules(List<Map<String, dynamic>> rules) async {
+    _speedRules = rules;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('speedRules', jsonEncode(rules));
+    notifyListeners();
+  }
+
+  Future<void> toggleDynamicSpeedEnabled(bool value) async {
+    _isDynamicSpeedEnabled = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('isDynamicSpeedEnabled', value);
+    notifyListeners();
+  }
 
   // Training Mode State
   bool _isTrainingMode = false;
@@ -329,6 +376,7 @@ class CameraService extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       _isTrainingAutoMode = prefs.getBool('trainingAutoMode') ?? true;
+      await loadSpeedRules();
 
       startHealthCheck();
       errorMessage = null;

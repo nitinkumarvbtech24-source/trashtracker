@@ -328,6 +328,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
               const SizedBox(height: 32),
               
+
+              
               _buildSectionTitle('App Information'),
               const SizedBox(height: 16),
               _buildInfoCard(
@@ -450,6 +452,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
   }
+
+
 
   Widget _buildSectionTitle(String title) {
     return Text(
