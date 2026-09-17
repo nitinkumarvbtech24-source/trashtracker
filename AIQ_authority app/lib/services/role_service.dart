@@ -33,12 +33,16 @@ class RoleService {
     });
   }
 
-  static void setCurrentUserRole(String roleTitle) {
+  static String? _currentUserRoleTitle;
+  static String? _currentUserZone;
+  static String? _currentUserWard;
+
+  static void setCurrentUserRole(String roleTitle, {String? zone, String? ward}) {
     _currentUserRoleTitle = roleTitle;
+    _currentUserZone = zone;
+    _currentUserWard = ward;
     _updateCurrentUserPermissions();
   }
-
-  static String? _currentUserRoleTitle;
 
   static String? get currentUserRoleTitle => _currentUserRoleTitle;
 
@@ -61,14 +65,28 @@ class RoleService {
     if (hasAllAccess(moduleName)) return []; // Empty means all allowed
     final perms = currentUserPermissions.value?[moduleName];
     if (perms == null) return [];
-    return List<String>.from(perms['zones'] ?? []);
+    List<String> roleZones = List<String>.from(perms['zones'] ?? []);
+    if (_currentUserZone != null && _currentUserZone != 'All Zones' && _currentUserZone!.isNotEmpty) {
+      if (roleZones.contains(_currentUserZone) || roleZones.contains('All Zones')) {
+         return [_currentUserZone!];
+      }
+      return []; // Conflict: User assigned zone not allowed by Role
+    }
+    return roleZones;
   }
 
   static List<String> getAllowedWardsForModule(String moduleName) {
     if (hasAllAccess(moduleName)) return []; // Empty means all allowed
     final perms = currentUserPermissions.value?[moduleName];
     if (perms == null) return [];
-    return List<String>.from(perms['wards'] ?? []);
+    List<String> roleWards = List<String>.from(perms['wards'] ?? []);
+    if (_currentUserWard != null && _currentUserWard != 'All Wards' && _currentUserWard!.isNotEmpty) {
+      if (roleWards.contains(_currentUserWard) || roleWards.contains('All Wards')) {
+         return [_currentUserWard!];
+      }
+      return []; // Conflict: User assigned ward not allowed by Role
+    }
+    return roleWards;
   }
 
   static List<Map<String, dynamic>> _getDefaultRoles(List<String> allZones, List<String> allWards) {

@@ -51,9 +51,15 @@ class _LoginScreenState extends State<LoginScreen> {
         await prefs.setString('userRole', userData['role'] ?? '');
         await prefs.setString('userEmail', email);
         await prefs.setString('userName', userData['name'] ?? '');
+        await prefs.setString('userZone', userData['zone'] ?? '');
+        await prefs.setString('userWard', userData['ward'] ?? '');
         
         // Update role service immediately
-        RoleService.setCurrentUserRole(userData['role'] ?? '');
+        RoleService.setCurrentUserRole(
+          userData['role'] ?? '', 
+          zone: userData['zone'], 
+          ward: userData['ward']
+        );
         
         if (!mounted) return;
         Navigator.of(context).pushReplacement(

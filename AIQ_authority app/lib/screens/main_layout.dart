@@ -32,8 +32,10 @@ class _MainLayoutState extends State<MainLayout> {
         _userName = prefs.getString('userName') ?? 'Admin User';
         _userRole = prefs.getString('userRole') ?? 'Super Admin';
       });
+      final userZone = prefs.getString('userZone');
+      final userWard = prefs.getString('userWard');
       // Set initial user role in RoleService just in case
-      RoleService.setCurrentUserRole(_userRole);
+      RoleService.setCurrentUserRole(_userRole, zone: userZone, ward: userWard);
     }
   }
   
