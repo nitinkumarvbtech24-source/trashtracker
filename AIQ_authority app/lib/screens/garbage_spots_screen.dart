@@ -8,6 +8,7 @@ import 'dart:convert';
 import 'dart:async';
 import 'package:url_launcher/url_launcher.dart';
 import '../models/garbage_flag.dart';
+import '../widgets/ngrok_image.dart';
 
 class GarbageSpotsScreen extends StatefulWidget {
   const GarbageSpotsScreen({super.key});
@@ -267,7 +268,7 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
                   ListView.separated(
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
-                    itemCount: filteredFlags.length, // use full list or paginate
+                    itemCount: math.min(filteredFlags.length, 10), // Limit to 10 for performance
                     separatorBuilder: (context, index) => const Divider(height: 1, color: Color(0xFFE2E8F0)),
                     itemBuilder: (context, index) {
                       return _buildTableRow(index, filteredFlags[index]);
@@ -581,7 +582,7 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text('Showing 1 to ${_garbageFlags.length} of ${_garbageFlags.length} spots', style: const TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.w500)),
+          Text('Showing 1 to ${math.min(_garbageFlags.length, 10)} of ${_garbageFlags.length} spots', style: const TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.w500)),
           Row(
             children: [
               _buildPageButton(LucideIcons.chevronLeft, false),
@@ -756,8 +757,7 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
   }
 
   Widget _buildNavItem(int index, String title, IconData icon, bool isSelected) {
-    // In mockup, "Street Cleanliness AI" is highlighted (index 3 now). Let's set index 3 to selected for accuracy.
-    bool active = index == 3; 
+    bool active = isSelected; 
 
     return InkWell(
       onTap: () {},
@@ -810,13 +810,11 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
       }
     }
     
-    return Image.network(
-      url,
+    return NgrokImage(
+      url: url,
       width: width,
       height: height,
       fit: fit,
-      headers: const {"ngrok-skip-browser-warning": "true"},
-      errorBuilder: (_, __, ___) => _buildImagePlaceholder(width, height),
     );
   }
 

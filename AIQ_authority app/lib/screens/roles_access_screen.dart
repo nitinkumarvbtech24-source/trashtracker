@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:async';
+import 'package:latlong2/latlong.dart';
+import '../models/ward.dart';
+import '../models/zone.dart';
+import '../services/role_service.dart';
 
 class RolesAccessScreen extends StatefulWidget {
   const RolesAccessScreen({super.key});
@@ -21,51 +25,54 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
     'Street Cleanliness AI',
     'Road Health Monitor AI',
     'Reports',
+    'Roles & Access',
     'Settings'
   ];
 
   List<String> _allZones = [];
   List<String> _allWards = [];
+  List<Zone> _zoneModels = [];
+  List<Ward> _wardModels = [];
   StreamSubscription<QuerySnapshot>? _wardsSub;
   StreamSubscription<QuerySnapshot>? _zonesSub;
 
-  // Helper to generate default permissions for a new role
-  Map<String, dynamic> _generateDefaultPermissions() {
-    Map<String, dynamic> perms = {};
-    for (String mod in _modules) {
-      perms[mod] = {
-        'viewAccess': 'Zone Based Access',
-        'actions': {'view': false, 'add': false, 'edit': false, 'delete': false},
-        'export': false,
-        'zones': <String>['North Zone'],
-        'wards': <String>['Ward 01', 'Ward 02'],
-      };
+  bool _isWardInZone(Ward ward, Zone zone) {
+    if (ward.boundary.isEmpty || zone.boundary.isEmpty) return true; // Fallback for dummy data without bounds
+    double cLat = 0, cLng = 0;
+    for(var p in ward.boundary) { cLat += p.latitude; cLng += p.longitude; }
+    LatLng centroid = LatLng(cLat / ward.boundary.length, cLng / ward.boundary.length);
+
+    int intersectCount = 0;
+    for (int j = 0; j < zone.boundary.length - 1; j++) {
+      if (_rayCastIntersect(centroid, zone.boundary[j], zone.boundary[j + 1])) {
+        intersectCount++;
+      }
     }
-    return perms;
+    if (_rayCastIntersect(centroid, zone.boundary.last, zone.boundary.first)) intersectCount++;
+    return (intersectCount % 2) == 1;
   }
 
-  // Helper to generate full access permissions (e.g. for Super Admin)
-  Map<String, dynamic> _generateFullPermissions() {
-    Map<String, dynamic> perms = {};
-    for (String mod in _modules) {
-      perms[mod] = {
-        'viewAccess': 'All Data (All Zones & Wards)',
-        'actions': {'view': true, 'add': true, 'edit': true, 'delete': true},
-        'export': true,
-        'zones': List<String>.from(_allZones),
-        'wards': List<String>.from(_allWards),
-      };
-    }
-    return perms;
+  bool _rayCastIntersect(LatLng point, LatLng vertA, LatLng vertB) {
+    double aY = vertA.latitude, bY = vertB.latitude;
+    double aX = vertA.longitude, bX = vertB.longitude;
+    double pY = point.latitude, pX = point.longitude;
+    if ((aY > pY && bY > pY) || (aY < pY && bY < pY) || (aX < pX && bX < pX)) return false;
+    if (aY == bY) return false;
+    double m = (aX - bX) / (aY - bY);
+    double x = aX + m * (pY - aY);
+    return x > pX;
   }
+
+  // Helper methods removed; moved to RoleService
 
   late List<Map<String, dynamic>> _roles;
 
   // Expansion panel states for modules
-  final List<bool> _moduleExpanded = [true, false, false, false, false, false];
+  final List<bool> _moduleExpanded = [true, false, false, false, false, false, false];
 
   // User Management State
-  late List<Map<String, dynamic>> _users;
+  List<Map<String, dynamic>> _users = [];
+  StreamSubscription<QuerySnapshot>? _usersSub;
   String _searchQuery = '';
   String _filterRole = 'All Roles';
   String _filterStatus = 'All Status';
@@ -78,9 +85,23 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
   final TextEditingController _userPasswordController = TextEditingController();
   final TextEditingController _userConfirmPasswordController = TextEditingController();
   String? _selectedFormRole;
+  String? _selectedFormZone;
+  String? _selectedFormWard;
+
+  void _onRolesUpdated() {
+    if (mounted) {
+      setState(() {
+        _roles = RoleService.globalRoles ?? [];
+        if (_selectedRoleIndex >= _roles.length) {
+          _selectedRoleIndex = _roles.isEmpty ? -1 : 0;
+        }
+      });
+    }
+  }
 
   @override
   void dispose() {
+    _usersSub?.cancel();
     _wardsSub?.cancel();
     _zonesSub?.cancel();
     _userNameController.dispose();
@@ -88,6 +109,7 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
     _userPhoneController.dispose();
     _userPasswordController.dispose();
     _userConfirmPasswordController.dispose();
+    RoleService.rolesInitialized.removeListener(_onRolesUpdated);
     super.dispose();
   }
 
@@ -95,14 +117,16 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
     _zonesSub = FirebaseFirestore.instance.collection('zones').snapshots().listen((snapshot) {
       if (!mounted) return;
       setState(() {
-        _allZones = snapshot.docs.map((doc) => doc.data()['name'] as String? ?? doc.id).toList();
+        _zoneModels = snapshot.docs.map((doc) => Zone.fromJson(doc.id, doc.data())).toList();
+        _allZones = _zoneModels.map((z) => z.name).toList();
       });
     });
 
     _wardsSub = FirebaseFirestore.instance.collection('wards').snapshots().listen((snapshot) {
       if (!mounted) return;
       setState(() {
-        _allWards = snapshot.docs.map((doc) => doc.data()['name'] as String? ?? doc.id).toList();
+        _wardModels = snapshot.docs.map((doc) => Ward.fromJson(doc.id, doc.data())).toList();
+        _allWards = _wardModels.map((w) => w.name).toList();
       });
     });
   }
@@ -112,60 +136,20 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
     super.initState();
     _fetchZonesAndWards();
     
-    _roles = [
-      {
-        'title': 'Super Admin',
-        'subtitle': 'Full access to all modules and settings',
-        'icon': LucideIcons.shield,
-        'users': 2,
-        'isSystem': true,
-        'color': const Color(0xFF198754),
-        'bgColor': const Color(0xFFE6F4EA),
-        'permissions': _generateFullPermissions(),
-      },
-      {
-        'title': 'Authority',
-        'subtitle': 'Can access all modules and edit data',
-        'icon': LucideIcons.briefcase,
-        'users': 5,
-        'isSystem': false,
-        'color': const Color(0xFF8B5CF6),
-        'bgColor': const Color(0xFFF3E8FF),
-        'permissions': _generateFullPermissions(),
-      },
-      {
-        'title': 'Zone Officer',
-        'subtitle': 'Access to zone-level data and operations',
-        'icon': LucideIcons.users,
-        'users': 12,
-        'isSystem': false,
-        'color': const Color(0xFF3B82F6),
-        'bgColor': const Color(0xFFDBEAFE),
-        'permissions': _generateDefaultPermissions(),
-      },
-      {
-        'title': 'Ward Officer',
-        'subtitle': 'Access to ward-level data and operations',
-        'icon': LucideIcons.award,
-        'users': 24,
-        'isSystem': false,
-        'color': const Color(0xFFF97316),
-        'bgColor': const Color(0xFFFFEDD5),
-        'permissions': _generateDefaultPermissions(),
-      },
-    ];
+    RoleService.initRoles(_allZones, _allWards);
+    _roles = RoleService.globalRoles ?? [];
+    RoleService.rolesInitialized.addListener(_onRolesUpdated);
 
-    // Give Zone Officer some specific default mock permissions
-    _roles[2]['permissions']['Master Dashboard']['actions'] = {'view': true, 'add': true, 'edit': true, 'delete': false};
-
-    _users = [
-      {'name': 'Nitin Kumar V', 'email': 'nitin.kumar@streetaiq.com', 'role': 'Super Admin', 'phone': '+91 98765 43210', 'status': 'Active'},
-      {'name': 'Admin User', 'email': 'admin@streetaiq.com', 'role': 'Authority', 'phone': '+91 98765 43211', 'status': 'Active'},
-      {'name': 'Rahul Sharma', 'email': 'rahul.zonal@streetaiq.com', 'role': 'Zone Officer', 'phone': '+91 98765 43212', 'status': 'Active'},
-      {'name': 'Priya Nair', 'email': 'priya.ward@streetaiq.com', 'role': 'Ward Officer', 'phone': '+91 98765 43213', 'status': 'Active'},
-      {'name': 'Suresh Driver', 'email': 'suresh.driver@streetaiq.com', 'role': 'Driver', 'phone': '+91 98765 43214', 'status': 'Active'},
-      {'name': 'Ramesh Sweeper', 'email': 'ramesh.sweeper@streetaiq.com', 'role': 'Sweeper', 'phone': '+91 98765 43215', 'status': 'Inactive'},
-    ];
+    _usersSub = FirebaseFirestore.instance.collection('authority_users').snapshots().listen((snapshot) {
+      if (!mounted) return;
+      setState(() {
+        _users = snapshot.docs.map((doc) {
+          var data = doc.data();
+          data['id'] = doc.id;
+          return data;
+        }).toList();
+      });
+    });
   }
 
   void _showCreateEditRoleDialog({int? editIndex}) {
@@ -186,33 +170,35 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
         return AlertDialog(
           backgroundColor: Colors.white,
           title: Text(isEditing ? 'Edit Role' : 'Create New Role', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: titleController,
-                style: const TextStyle(color: Colors.black),
-                decoration: const InputDecoration(
-                  labelText: 'Role Name',
-                  labelStyle: TextStyle(color: Colors.black54),
-                  border: OutlineInputBorder(),
-                  enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.black26)),
-                  focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF0F5132))),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: titleController,
+                  style: const TextStyle(color: Colors.black),
+                  decoration: const InputDecoration(
+                    labelText: 'Role Name',
+                    labelStyle: TextStyle(color: Colors.black54),
+                    border: OutlineInputBorder(),
+                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.black26)),
+                    focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF0F5132))),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: subtitleController,
-                style: const TextStyle(color: Colors.black),
-                decoration: const InputDecoration(
-                  labelText: 'Subtitle Description',
-                  labelStyle: TextStyle(color: Colors.black54),
-                  border: OutlineInputBorder(),
-                  enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.black26)),
-                  focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF0F5132))),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: subtitleController,
+                  style: const TextStyle(color: Colors.black),
+                  decoration: const InputDecoration(
+                    labelText: 'Subtitle Description',
+                    labelStyle: TextStyle(color: Colors.black54),
+                    border: OutlineInputBorder(),
+                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.black26)),
+                    focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF0F5132))),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
           actions: [
             TextButton(
@@ -221,27 +207,31 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0F5132)),
-              onPressed: () {
+              onPressed: () async {
                 if (titleController.text.trim().isEmpty) return;
-                setState(() {
-                  if (isEditing) {
-                    _roles[editIndex]['title'] = titleController.text;
-                    _roles[editIndex]['subtitle'] = subtitleController.text;
-                  } else {
-                    _roles.add({
-                      'title': titleController.text,
-                      'subtitle': subtitleController.text,
-                      'icon': icon,
-                      'users': 0,
-                      'isSystem': false,
-                      'color': iconColor,
-                      'bgColor': bgColor,
-                      'permissions': _generateDefaultPermissions(),
-                    });
-                    _selectedRoleIndex = _roles.length - 1; // Select the new role
-                  }
-                });
-                Navigator.pop(context);
+                
+                final newRole = isEditing 
+                    ? Map<String, dynamic>.from(_roles[editIndex])
+                    : {
+                        'title': titleController.text,
+                        'subtitle': subtitleController.text,
+                        'icon': icon,
+                        'users': 0,
+                        'isSystem': false,
+                        'color': iconColor,
+                        'bgColor': bgColor,
+                        'permissions': RoleService.generateDefaultPermissionsForNewRole(),
+                      };
+                
+                if (isEditing) {
+                  newRole['title'] = titleController.text;
+                  newRole['subtitle'] = subtitleController.text;
+                }
+                
+                // Show loading indicator or handle state if needed
+                await RoleService.saveRole(newRole);
+                
+                if (mounted) Navigator.pop(context);
               },
               child: Text(isEditing ? 'Save Changes' : 'Create Role', style: const TextStyle(color: Colors.white)),
             ),
@@ -267,18 +257,11 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFDC3545)),
-              onPressed: () {
-                setState(() {
-                  _roles.removeAt(index);
-                  if (_selectedRoleIndex >= _roles.length) {
-                    _selectedRoleIndex = _roles.length - 1;
-                  } else if (_selectedRoleIndex == index) {
-                    _selectedRoleIndex = 0;
-                  } else if (_selectedRoleIndex > index) {
-                    _selectedRoleIndex--;
-                  }
-                });
-                Navigator.pop(context);
+              onPressed: () async {
+                final roleTitle = _roles[index]['title'];
+                await RoleService.deleteRole(roleTitle);
+                
+                if (mounted) Navigator.pop(context);
               },
               child: const Text('Delete', style: TextStyle(color: Colors.white)),
             ),
@@ -489,7 +472,7 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 const Text('Users', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10)),
-                Text('${role['users']}', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1E293B), fontSize: 14)),
+                Text('${_users.where((u) => u['role'] == role['title']).length}', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1E293B), fontSize: 14)),
               ],
             ),
             const SizedBox(width: 16),
@@ -505,7 +488,7 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                 }
               },
               itemBuilder: (context) => [
-                const PopupMenuItem(value: 'edit', child: Text('Edit Role')),
+                const PopupMenuItem(value: 'edit', child: Text('Edit Role', style: TextStyle(color: Colors.black))),
                 if (!role['isSystem']) const PopupMenuItem(value: 'delete', child: Text('Delete Role', style: TextStyle(color: Colors.red))),
               ],
             )
@@ -592,7 +575,34 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                   const SizedBox(height: 12),
                   _buildModulePanel('Reports', LucideIcons.fileText, 4, currentRole, isExport: true),
                   const SizedBox(height: 12),
-                  _buildModulePanel('Settings', LucideIcons.settings, 5, currentRole, isSettings: true),
+                  _buildModulePanel('Roles & Access', LucideIcons.users, 5, currentRole),
+                  const SizedBox(height: 12),
+                  _buildModulePanel('Settings', LucideIcons.settings, 6, currentRole, isSettings: true),
+                  const SizedBox(height: 24),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: ElevatedButton.icon(
+                      onPressed: () async {
+                        await RoleService.saveRole(currentRole);
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Permissions saved successfully!'),
+                              backgroundColor: Color(0xFF0F5132),
+                              duration: Duration(seconds: 2),
+                            ),
+                          );
+                        }
+                      },
+                      icon: const Icon(LucideIcons.save, size: 16, color: Colors.white),
+                      label: const Text('Save Permissions', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF0F5132),
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -602,15 +612,79 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
     );
   }
 
+  void _applyPermissionsToAllModules(String sourceModuleName) {
+    if (_selectedRoleIndex < 0 || _selectedRoleIndex >= _roles.length) return;
+    
+    final role = _roles[_selectedRoleIndex];
+    final perms = role['permissions'] as Map<String, dynamic>;
+    final sourcePerms = perms[sourceModuleName] as Map<String, dynamic>;
+    
+    setState(() {
+      for (String mod in _modules) {
+        if (mod == sourceModuleName) continue;
+        
+        final targetPerms = perms[mod] as Map<String, dynamic>;
+        
+        targetPerms['enabled'] = sourcePerms['enabled'] ?? (sourcePerms['actions']?['view'] ?? false);
+        targetPerms['viewAccess'] = sourcePerms['viewAccess'];
+        targetPerms['zones'] = List<String>.from(sourcePerms['zones']);
+        targetPerms['wards'] = List<String>.from(sourcePerms['wards']);
+        
+        if (sourcePerms['actions'] != null && targetPerms['actions'] != null) {
+          targetPerms['actions'] = Map<String, dynamic>.from(sourcePerms['actions']);
+        }
+        
+        if (sourcePerms.containsKey('export') && targetPerms.containsKey('export')) {
+          targetPerms['export'] = sourcePerms['export'];
+        }
+      }
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Permissions applied to all modules successfully.'),
+        backgroundColor: Color(0xFF0F5132),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
   Widget _buildModulePanel(String moduleName, IconData icon, int index, Map<String, dynamic> currentRole, {bool isExport = false, bool isSettings = false}) {
-    bool isExpanded = _moduleExpanded[index];
     Map<String, dynamic> perms = currentRole['permissions'][moduleName];
+    bool isEnabled = perms['enabled'] ?? (perms['actions']?['view'] ?? false);
+    bool isExpanded = _moduleExpanded[index];
+    List<String> selectedZones = List<String>.from(perms['zones'] ?? []);
+    List<String> selectedWards = List<String>.from(perms['wards'] ?? []);
 
-    List<String> selectedZones = perms['zones'] as List<String>;
-    List<String> selectedWards = perms['wards'] as List<String>;
-
-    List<String> availableZones = _allZones.where((z) => !selectedZones.contains(z)).toList();
-    List<String> availableWards = _allWards.where((w) => !selectedWards.contains(w)).toList();
+    List<String> allZonesOptions = ['All Zones', ..._allZones];
+    List<String> availableZones = allZonesOptions.where((z) => !selectedZones.contains(z)).toList();
+    List<String> allWardsOptions = ['All Wards', ..._allWards];
+    List<String> validWards = allWardsOptions;
+    
+    if (selectedZones.isNotEmpty && !selectedZones.contains('All Zones')) {
+      validWards = _wardModels.where((w) {
+        if (w.boundary.isEmpty) return false;
+        bool inAnyZone = false;
+        for (String zoneName in selectedZones) {
+          try {
+            final z = _zoneModels.firstWhere((zm) => zm.name == zoneName);
+            if (_isWardInZone(w, z)) {
+              inAnyZone = true;
+              break;
+            }
+          } catch (_) {}
+        }
+        return inAnyZone;
+      }).map((w) => w.name).toList();
+      validWards.insert(0, 'All Wards');
+      
+      // Fallback: If spatial logic filtered out EVERYTHING (e.g. dummy data without polygons),
+      // just show all wards so the user isn't stuck with an empty dropdown.
+      if (validWards.length == 1 && validWards.first == 'All Wards') {
+        validWards = List<String>.from(allWardsOptions);
+      }
+    }
+    List<String> availableWards = validWards.where((w) => !selectedWards.contains(w)).toList();
 
     return Container(
       decoration: BoxDecoration(
@@ -627,15 +701,37 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
               });
             },
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               decoration: BoxDecoration(
                 border: Border(bottom: BorderSide(color: isExpanded ? const Color(0xFFE2E8F0) : Colors.transparent)),
               ),
               child: Row(
                 children: [
-                  Icon(icon, size: 18, color: const Color(0xFF64748B)),
-                  const SizedBox(width: 12),
-                  Expanded(child: Text(moduleName, style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1E293B)))),
+                  Checkbox(
+                    value: isEnabled,
+                    activeColor: const Color(0xFF0F5132),
+                    onChanged: (val) {
+                      setState(() {
+                        perms['enabled'] = val ?? false;
+                      });
+                    },
+                  ),
+                  Icon(icon, size: 18, color: isEnabled ? const Color(0xFF64748B) : Colors.grey.shade400),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(moduleName, style: TextStyle(fontWeight: FontWeight.bold, color: isEnabled ? const Color(0xFF1E293B) : Colors.grey.shade400))),
+                  if (isExpanded) ...[
+                    TextButton.icon(
+                      onPressed: () => _applyPermissionsToAllModules(moduleName),
+                      icon: const Icon(LucideIcons.copy, size: 14, color: Color(0xFF0F5132)),
+                      label: const Text('Apply to All', style: TextStyle(color: Color(0xFF0F5132), fontSize: 12, fontWeight: FontWeight.bold)),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        backgroundColor: const Color(0xFF0F5132).withOpacity(0.05),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                  ],
                   if (!isExpanded) ...[
                     _buildCollapsedSummary(perms, isExport, isSettings),
                     const SizedBox(width: 24),
@@ -706,6 +802,7 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                                         children: selectedZones.map((z) => _buildChip(z, () {
                                           setState(() {
                                             selectedZones.remove(z);
+                                            perms['zones'] = selectedZones;
                                           });
                                         })).toList(),
                                       ),
@@ -716,6 +813,7 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                                       onSelected: (val) {
                                         setState(() {
                                           selectedZones.add(val);
+                                          perms['zones'] = selectedZones;
                                         });
                                       },
                                       itemBuilder: (context) {
@@ -754,6 +852,7 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                                           ...selectedWards.take(4).map((w) => _buildChip(w, () {
                                             setState(() {
                                               selectedWards.remove(w);
+                                              perms['wards'] = selectedWards;
                                             });
                                           })),
                                           if (selectedWards.length > 4)
@@ -774,6 +873,7 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                                       onSelected: (val) {
                                         setState(() {
                                           selectedWards.add(val);
+                                          perms['wards'] = selectedWards;
                                         });
                                       },
                                       itemBuilder: (context) {
@@ -971,13 +1071,15 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: const [
-                  Text('Users', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
-                  SizedBox(height: 4),
-                  Text('Manage and assign roles to users', style: TextStyle(fontSize: 12, color: Color(0xFF64748B))),
-                ],
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: const [
+                    Text('Users', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+                    SizedBox(height: 4),
+                    Text('Manage and assign roles to users', style: TextStyle(fontSize: 12, color: Color(0xFF64748B))),
+                  ],
+                ),
               ),
               Row(
                 children: [
@@ -1001,6 +1103,8 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                         _userPasswordController.clear();
                         _userConfirmPasswordController.clear();
                         _selectedFormRole = null;
+                        _selectedFormZone = null;
+                        _selectedFormWard = null;
                       });
                     },
                     icon: const Icon(Icons.add, size: 16, color: Colors.white),
@@ -1196,10 +1300,12 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                                       onTap: () {
                                         setState(() {
                                           _editingUserIndex = rawIndex;
-                                          _userNameController.text = user['name'];
-                                          _userEmailController.text = user['email'];
-                                          _userPhoneController.text = user['phone'];
+                                          _userNameController.text = user['name'] ?? '';
+                                          _userEmailController.text = user['email'] ?? '';
+                                          _userPhoneController.text = user['phone'] ?? '';
                                           _selectedFormRole = user['role'];
+                                          _selectedFormZone = user['zone'];
+                                          _selectedFormWard = user['ward'];
                                           _userPasswordController.clear();
                                           _userConfirmPasswordController.clear();
                                         });
@@ -1215,17 +1321,21 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                                     ),
                                     const SizedBox(width: 8),
                                     InkWell(
-                                      onTap: () {
-                                        setState(() {
-                                          _users.removeAt(rawIndex);
-                                          if (_editingUserIndex == rawIndex) {
+                                      onTap: () async {
+                                        await FirebaseFirestore.instance.collection('authority_users').doc(user['id']).delete();
+                                        if (_editingUserIndex == rawIndex) {
+                                          setState(() {
                                             _editingUserIndex = null;
                                             _userNameController.clear();
                                             _userEmailController.clear();
                                             _userPhoneController.clear();
+                                            _userPasswordController.clear();
+                                            _userConfirmPasswordController.clear();
                                             _selectedFormRole = null;
-                                          }
-                                        });
+                                            _selectedFormZone = null;
+                                            _selectedFormWard = null;
+                                          });
+                                        }
                                       },
                                       child: Container(
                                         padding: const EdgeInsets.all(4),
@@ -1288,6 +1398,33 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
   Widget _buildUserManagementRightColumn() {
     bool isEditing = _editingUserIndex != null;
 
+    bool hasAllAccess = false;
+    List<String> allowedZones = [];
+    List<String> allowedWards = [];
+
+    if (_selectedFormRole != null) {
+      try {
+        final role = _roles.firstWhere((r) => r['title'] == _selectedFormRole);
+        final perms = role['permissions'] as Map<String, dynamic>;
+        
+        for (var module in perms.values) {
+          if (module['viewAccess'] == 'All Data (All Zones & Wards)') {
+            hasAllAccess = true;
+            break;
+          }
+          final zones = List<String>.from(module['zones'] ?? []);
+          if (zones.contains('All Zones')) {
+            hasAllAccess = true;
+            break;
+          }
+          allowedZones.addAll(zones);
+          allowedWards.addAll(List<String>.from(module['wards'] ?? []));
+        }
+      } catch (_) {}
+    }
+    allowedZones = allowedZones.toSet().toList();
+    allowedWards = allowedWards.toSet().toList();
+
     return Expanded(
       flex: 3,
       child: Container(
@@ -1328,6 +1465,86 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                         onChanged: (val) {
                           setState(() {
                             _selectedFormRole = val;
+                            _selectedFormZone = null;
+                            _selectedFormWard = null;
+                          });
+                        },
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text('Zone *', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Color(0xFF1E293B))),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: const Color(0xFFE2E8F0)),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        dropdownColor: Colors.white,
+                        isExpanded: true,
+                        hint: const Text('Select Zone', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 14)),
+                        value: _selectedFormZone,
+                        icon: const Icon(LucideIcons.chevronDown, size: 16, color: Color(0xFF64748B)),
+                        items: (() {
+                          List<String> zItems = (hasAllAccess ? _allZones : allowedZones).toList();
+                          if (zItems.isNotEmpty && !zItems.contains('All Zones')) {
+                            zItems.insert(0, 'All Zones');
+                          } else if (zItems.isEmpty) {
+                            return <DropdownMenuItem<String>>[];
+                          }
+                          return zItems.map((z) {
+                            return DropdownMenuItem(value: z, child: Text(z, style: const TextStyle(fontSize: 14, color: Colors.black)));
+                          }).toList();
+                        })(),
+                        onChanged: (val) {
+                          setState(() {
+                            _selectedFormZone = val;
+                            _selectedFormWard = null; // Reset ward when zone changes
+                          });
+                        },
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text('Ward *', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Color(0xFF1E293B))),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: const Color(0xFFE2E8F0)),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        dropdownColor: Colors.white,
+                        isExpanded: true,
+                        hint: const Text('Select Ward', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 14)),
+                        value: _selectedFormWard,
+                        icon: const Icon(LucideIcons.chevronDown, size: 16, color: Color(0xFF64748B)),
+                        items: (() {
+                          if ((hasAllAccess ? _allWards : allowedWards).isEmpty) return <DropdownMenuItem<String>>[];
+                          List<String> wItems = _wardModels.where((w) {
+                            if (!hasAllAccess && !allowedWards.contains('All Wards') && !allowedWards.contains(w.name)) return false;
+                            if (_selectedFormZone == null || _selectedFormZone == 'All Zones') return true;
+                            try {
+                              final z = _zoneModels.firstWhere((zm) => zm.name == _selectedFormZone);
+                              return _isWardInZone(w, z);
+                            } catch (_) { return false; }
+                          }).map((w) => w.name).toList();
+                          
+                          if (wItems.isNotEmpty && !wItems.contains('All Wards')) {
+                            wItems.insert(0, 'All Wards');
+                          }
+                          return wItems.map((w) {
+                            return DropdownMenuItem(value: w, child: Text(w, style: const TextStyle(fontSize: 14, color: Colors.black)));
+                          }).toList();
+                        })(),
+                        onChanged: (val) {
+                          setState(() {
+                            _selectedFormWard = val;
                           });
                         },
                       ),
@@ -1371,33 +1588,41 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                 ),
                 const SizedBox(width: 12),
                 ElevatedButton(
-                  onPressed: () {
-                    if (_userNameController.text.isEmpty || _selectedFormRole == null || _userEmailController.text.isEmpty) return;
+                  onPressed: () async {
+                    String finalZone = hasAllAccess ? 'All Zones' : (_selectedFormZone ?? '');
+                    String finalWard = hasAllAccess ? 'All Wards' : (_selectedFormWard ?? '');
+                    
+                    if (_userNameController.text.isEmpty || _selectedFormRole == null || _userEmailController.text.isEmpty || finalZone.isEmpty || finalWard.isEmpty) return;
+                    
+                    final userData = {
+                      'name': _userNameController.text,
+                      'email': _userEmailController.text,
+                      'password': _userPasswordController.text,
+                      'role': _selectedFormRole,
+                      'zone': finalZone,
+                      'ward': finalWard,
+                      'phone': _userPhoneController.text,
+                    };
+
+                    if (isEditing) {
+                      final docId = _users[_editingUserIndex!]['id'];
+                      userData['status'] = _users[_editingUserIndex!]['status'] ?? 'Active';
+                      await FirebaseFirestore.instance.collection('authority_users').doc(docId).update(userData);
+                    } else {
+                      userData['status'] = 'Active';
+                      await FirebaseFirestore.instance.collection('authority_users').add(userData);
+                    }
+
                     setState(() {
-                      if (isEditing) {
-                        _users[_editingUserIndex!] = {
-                          'name': _userNameController.text,
-                          'email': _userEmailController.text,
-                          'role': _selectedFormRole,
-                          'phone': _userPhoneController.text,
-                          'status': _users[_editingUserIndex!]['status'], // Keep existing
-                        };
-                        _editingUserIndex = null;
-                      } else {
-                        _users.insert(0, {
-                          'name': _userNameController.text,
-                          'email': _userEmailController.text,
-                          'role': _selectedFormRole,
-                          'phone': _userPhoneController.text,
-                          'status': 'Active', // Default
-                        });
-                      }
+                      _editingUserIndex = null;
                       _userNameController.clear();
                       _userEmailController.clear();
                       _userPhoneController.clear();
                       _userPasswordController.clear();
                       _userConfirmPasswordController.clear();
                       _selectedFormRole = null;
+                      _selectedFormZone = null;
+                      _selectedFormWard = null;
                     });
                   },
                   style: ElevatedButton.styleFrom(

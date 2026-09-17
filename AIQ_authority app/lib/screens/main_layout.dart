@@ -8,6 +8,9 @@ import 'cleanliness_screen.dart';
 import 'health_screen.dart';
 import 'settings_screen.dart';
 import 'roles_access_screen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../services/role_service.dart';
+import '../../main.dart' as app_main;
 
 class MainLayout extends StatefulWidget {
   const MainLayout({super.key});
@@ -19,6 +22,40 @@ class MainLayout extends StatefulWidget {
 class _MainLayoutState extends State<MainLayout> {
   int _selectedIndex = 1; // Default to Fleets & Routes for this task
   bool _isSidebarOpen = true; // Open by default based on mockup
+  String _userName = 'Loading...';
+  String _userRole = '...';
+
+  Future<void> _loadUserSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _userName = prefs.getString('userName') ?? 'Admin User';
+        _userRole = prefs.getString('userRole') ?? 'Super Admin';
+      });
+      // Set initial user role in RoleService just in case
+      RoleService.setCurrentUserRole(_userRole);
+    }
+  }
+  
+  void _onPermissionsChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUserSession();
+    if (RoleService.globalRoles == null) {
+      RoleService.initRoles([], []);
+    }
+    RoleService.currentUserPermissions.addListener(_onPermissionsChanged);
+  }
+
+  @override
+  void dispose() {
+    RoleService.currentUserPermissions.removeListener(_onPermissionsChanged);
+    super.dispose();
+  }
 
   final List<Widget> _screens = [
     const RolesAccessScreen(), // 0
@@ -214,45 +251,66 @@ class _MainLayoutState extends State<MainLayout> {
                 ),
               ),
 
-              Container(
-                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF8F9FA).withOpacity(0.9),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFFD1E7DD)),
-                ),
-                child: Row(
-                  children: [
-                    CircleAvatar(
-                      backgroundColor: const Color(0xFFD1E7DD),
-                      child: const Icon(Icons.person, color: Color(0xFF0F5132)),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: const [
-                          Text(
-                            'Nitin Kumar V',
-                            style: TextStyle(
-                              color: Color(0xFF0D1B2A),
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
-                            ),
-                          ),
-                          Text(
-                            'Super Admin',
-                            style: TextStyle(
-                              color: Color(0xFF344054),
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
+              PopupMenuButton<String>(
+                color: Colors.white,
+                offset: const Offset(0, -100),
+                onSelected: (val) async {
+                  if (val == 'logout' || val == 'switch') {
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setBool('isLoggedIn', false);
+                    if (!mounted) return;
+                    Navigator.of(context).pushAndRemoveUntil(
+                      MaterialPageRoute(builder: (_) => const app_main.AppRoot()),
+                      (route) => false,
+                    );
+                  }
+                },
+                itemBuilder: (context) => [
+                  const PopupMenuItem(value: 'switch', child: Text('Switch Account', style: TextStyle(color: Colors.black))),
+                  const PopupMenuItem(value: 'logout', child: Text('Logout', style: TextStyle(color: Colors.red))),
+                ],
+                child: Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8F9FA).withOpacity(0.9),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFFD1E7DD)),
+                  ),
+                  child: Row(
+                    children: [
+                      const CircleAvatar(
+                        backgroundColor: Color(0xFFD1E7DD),
+                        child: Icon(Icons.person, color: Color(0xFF0F5132)),
                       ),
-                    ),
-                    const Icon(Icons.keyboard_arrow_down, color: Color(0xFF344054)),
-                  ],
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _userName,
+                              style: const TextStyle(
+                                color: Color(0xFF0D1B2A),
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            Text(
+                              _userRole,
+                              style: const TextStyle(
+                                color: Color(0xFF344054),
+                                fontSize: 12,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Icon(Icons.keyboard_arrow_down, color: Color(0xFF344054)),
+                    ],
+                  ),
                 ),
               ),
             ],
@@ -263,6 +321,16 @@ class _MainLayoutState extends State<MainLayout> {
   }
 
   Widget _buildNavItem(int index, String title, IconData icon) {
+    if (_userRole != 'Super Admin') {
+      final perms = RoleService.getRolePermissions(_userRole);
+      if (perms != null && perms[title] != null) {
+        if (perms[title]['enabled'] == false) return const SizedBox.shrink();
+      } else if (title == 'Roles & Access') {
+        // Fallback for roles that might not have this module yet but aren't Super Admin
+        return const SizedBox.shrink();
+      }
+    }
+
     final isSelected = _selectedIndex == index;
     
     return InkWell(

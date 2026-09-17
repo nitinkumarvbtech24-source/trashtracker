@@ -2,6 +2,50 @@
     "recent_potholes": [],
     "recent_snapshots": [
         {
+            "vehicle_number": "ka 01 aa 0002",
+            "ward": "Unassigned",
+            "lat": 12.922648765450754,
+            "lng": 77.50026060065615,
+            "display_class": "Bad Road",
+            "road_status": "Bad Road",
+            "confidence": 1.0,
+            "image_url": "/detections/event_1789454726.jpg",
+            "timestamp": "event_1789454726"
+        },
+        {
+            "vehicle_number": "ka 01 aa 0001",
+            "ward": "Rvu ward 01",
+            "lat": 12.9224143,
+            "lng": 77.5003164,
+            "display_class": "Bad Road",
+            "road_status": "Bad Road",
+            "confidence": 1.0,
+            "image_url": "/detections/event_1789454400.jpg",
+            "timestamp": "event_1789454400"
+        },
+        {
+            "vehicle_number": "ka 01 aa 0001",
+            "ward": "Rvu ward 01",
+            "lat": 12.9224824,
+            "lng": 77.5002443,
+            "display_class": "Pothole Detected",
+            "road_status": "Pothole Detected",
+            "confidence": 1.0,
+            "image_url": "/detections/event_1789454220.jpg",
+            "timestamp": "event_1789454220"
+        },
+        {
+            "vehicle_number": "ka 01 aa 0001",
+            "ward": "Rvu ward 01",
+            "lat": 12.9224826,
+            "lng": 77.5002384,
+            "display_class": "Bad Road",
+            "road_status": "Bad Road",
+            "confidence": 1.0,
+            "image_url": "/detections/event_1789454199.jpg",
+            "timestamp": "event_1789454199"
+        },
+        {
             "vehicle_number": "ka 01 aa 0001",
             "ward": "Rvu ward 01",
             "lat": 13.05695943777817,

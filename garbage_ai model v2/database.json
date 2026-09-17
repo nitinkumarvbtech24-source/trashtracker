@@ -1,5 +1,33 @@
 [
     {
+        "filename": "71c94a7142424c28919a1c5c68054f41.jpg",
+        "image_url": "/images/Very_Dirty/71c94a7142424c28919a1c5c68054f41.jpg",
+        "class": "Very_Dirty",
+        "display_class": "Very Dirty Road",
+        "confidence": 0.39073455333709717,
+        "timestamp": "2026-09-15 12:32:40",
+        "lat": 12.922672299875185,
+        "lng": 77.50029169604768,
+        "vehicle_number": "ka 01 aa 0002",
+        "ward": "Unassigned",
+        "session_id": "5e5aba8c-391a-4c78-ac9f-b282fdaf2f3b",
+        "point_type": "intermediate"
+    },
+    {
+        "filename": "2fb7a60c817f4b729f3bf2444d981f58.jpg",
+        "image_url": "/images/Very_Dirty/2fb7a60c817f4b729f3bf2444d981f58.jpg",
+        "class": "Very_Dirty",
+        "display_class": "Very Dirty Road",
+        "confidence": 0.3892436623573303,
+        "timestamp": "2026-09-15 12:32:40",
+        "lat": 12.922672299875185,
+        "lng": 77.50029169604768,
+        "vehicle_number": "ka 01 aa 0002",
+        "ward": "Unassigned",
+        "session_id": "463487e4-f169-4dee-8523-9cb765656a3d",
+        "point_type": "end"
+    },
+    {
         "filename": "b1be4cc480b94db1b20ca474d47e7aa5.jpg",
         "image_url": "/images/Not_a_Road/b1be4cc480b94db1b20ca474d47e7aa5.jpg",
         "class": "Not_a_Road",

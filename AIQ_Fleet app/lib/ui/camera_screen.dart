@@ -394,35 +394,54 @@ class _CameraScreenState extends State<CameraScreen> {
                           child: const Icon(Icons.settings, color: Colors.white, size: 16),
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      const Icon(Icons.cloud_sync, color: Colors.white70, size: 12),
-                      const SizedBox(width: 4),
-                      Container(
-                        width: 6, height: 6,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: (cameraService.isGarbageConnected || cameraService.isHealthConnected) ? Colors.greenAccent : Colors.redAccent,
-                        ),
-                      ),
+
                       const SizedBox(width: 12),
                       const Icon(Icons.delete_outline, color: Colors.white70, size: 12),
                       const SizedBox(width: 4),
-                      Container(
-                        width: 6, height: 6,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: cameraService.isGarbageConnected ? Colors.greenAccent : Colors.redAccent,
-                        ),
+                      Row(
+                        children: [
+                          Container(
+                            width: 6, height: 6,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: cameraService.isGarbageTunnelConnected ? Colors.greenAccent : Colors.redAccent,
+                            ),
+                          ),
+                          const SizedBox(width: 2),
+                          Container(
+                            width: 6, height: 6,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: cameraService.isGarbageTunnelConnected 
+                                  ? (cameraService.isGarbageBackendConnected ? Colors.greenAccent : Colors.redAccent)
+                                  : Colors.blueAccent,
+                            ),
+                          ),
+                        ],
                       ),
                       const SizedBox(width: 12),
                       const Icon(Icons.add_road, color: Colors.white70, size: 12),
                       const SizedBox(width: 4),
-                      Container(
-                        width: 6, height: 6,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: cameraService.isHealthConnected ? Colors.greenAccent : Colors.redAccent,
-                        ),
+                      Row(
+                        children: [
+                          Container(
+                            width: 6, height: 6,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: cameraService.isHealthTunnelConnected ? Colors.greenAccent : Colors.redAccent,
+                            ),
+                          ),
+                          const SizedBox(width: 2),
+                          Container(
+                            width: 6, height: 6,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: cameraService.isHealthTunnelConnected
+                                  ? (cameraService.isHealthBackendConnected ? Colors.greenAccent : Colors.redAccent)
+                                  : Colors.blueAccent,
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),

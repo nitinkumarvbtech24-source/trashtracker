@@ -6,9 +6,12 @@ import 'package:upgrader/upgrader.dart';
 
 import 'package:responsive_framework/responsive_framework.dart';
 import 'screens/main_layout.dart';
+import 'screens/login_screen.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/map_cache_service.dart';
+import 'services/role_service.dart';
 import 'constants.dart';
 
 void main() async {
@@ -81,8 +84,61 @@ class StreetAIQApp extends StatelessWidget {
             onAndroid: () => UpgraderAppcastStore(appcastURL: appcastURL),
           ),
         ),
-        child: const MainLayout(),
+        child: const AppRoot(),
       ),
     );
+  }
+}
+
+class AppRoot extends StatefulWidget {
+  const AppRoot({super.key});
+
+  @override
+  State<AppRoot> createState() => _AppRootState();
+}
+
+class _AppRootState extends State<AppRoot> {
+  bool _isLoading = true;
+  bool _showLogin = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkInitialState();
+  }
+
+  Future<void> _checkInitialState() async {
+    final prefs = await SharedPreferences.getInstance();
+    final isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
+
+    if (isLoggedIn) {
+      final role = prefs.getString('userRole');
+      if (role != null) {
+        RoleService.setCurrentUserRole(role);
+      }
+    }
+
+    // Initialize RoleService (it will pull from Firestore)
+    RoleService.initRoles([], []);
+
+    setState(() {
+      _showLogin = !isLoggedIn;
+      _isLoading = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator(color: Color(0xFF0F5132))),
+      );
+    }
+
+    if (_showLogin) {
+      return const LoginScreen();
+    }
+
+    return const MainLayout();
   }
 }

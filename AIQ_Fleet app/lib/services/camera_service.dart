@@ -29,10 +29,18 @@ class CameraService extends ChangeNotifier {
   Timer? _snapshotTimer;
   Timer? _healthCheckTimer;
 
-  bool _isGarbageConnected = false;
-  bool _isHealthConnected = false;
-  bool get isGarbageConnected => _isGarbageConnected;
-  bool get isHealthConnected => _isHealthConnected;
+  bool _isGarbageTunnelConnected = false;
+  bool _isGarbageBackendConnected = false;
+  bool _isHealthTunnelConnected = false;
+  bool _isHealthBackendConnected = false;
+
+  bool get isGarbageConnected => _isGarbageBackendConnected;
+  bool get isHealthConnected => _isHealthBackendConnected;
+
+  bool get isGarbageTunnelConnected => _isGarbageTunnelConnected;
+  bool get isGarbageBackendConnected => _isGarbageBackendConnected;
+  bool get isHealthTunnelConnected => _isHealthTunnelConnected;
+  bool get isHealthBackendConnected => _isHealthBackendConnected;
 
   String _latestGarbageStatus = 'UNKNOWN';
   Map<String, dynamic>? latestResult;
@@ -404,8 +412,14 @@ class CameraService extends ChangeNotifier {
       );
 
       await _controller!.initialize();
-      _minZoomLevel = await _controller!.getMinZoomLevel();
-      _maxZoomLevel = await _controller!.getMaxZoomLevel();
+      try {
+        _minZoomLevel = await _controller!.getMinZoomLevel();
+        _maxZoomLevel = await _controller!.getMaxZoomLevel();
+      } catch (e) {
+        debugPrint("Zoom level fetching failed, setting defaults: $e");
+        _minZoomLevel = 1.0;
+        _maxZoomLevel = 1.0;
+      }
       
       notifyListeners();
     } catch (e) {
@@ -424,28 +438,34 @@ class CameraService extends ChangeNotifier {
   Future<void> _checkHealth() async {
     try {
       final resG = await http.get(Uri.parse('$GARBAGE_AI_URL/api/snapshots'), headers: {'ngrok-skip-browser-warning': 'true'}).timeout(const Duration(seconds: 3));
-      final gConn = resG.statusCode == 200;
-      if (_isGarbageConnected != gConn) {
-        _isGarbageConnected = gConn;
+      final tunnelUp = true;
+      final backendUp = resG.statusCode == 200;
+      if (_isGarbageTunnelConnected != tunnelUp || _isGarbageBackendConnected != backendUp) {
+        _isGarbageTunnelConnected = tunnelUp;
+        _isGarbageBackendConnected = backendUp;
         notifyListeners();
       }
     } catch (e) {
-      if (_isGarbageConnected) {
-        _isGarbageConnected = false;
+      if (_isGarbageTunnelConnected || _isGarbageBackendConnected) {
+        _isGarbageTunnelConnected = false;
+        _isGarbageBackendConnected = false;
         notifyListeners();
       }
     }
     
     try {
       final resH = await http.get(Uri.parse('$HEALTH_AI_URL/api/snapshots'), headers: {'ngrok-skip-browser-warning': 'true'}).timeout(const Duration(seconds: 3));
-      final hConn = resH.statusCode == 200;
-      if (_isHealthConnected != hConn) {
-        _isHealthConnected = hConn;
+      final tunnelUp = true;
+      final backendUp = resH.statusCode == 200;
+      if (_isHealthTunnelConnected != tunnelUp || _isHealthBackendConnected != backendUp) {
+        _isHealthTunnelConnected = tunnelUp;
+        _isHealthBackendConnected = backendUp;
         notifyListeners();
       }
     } catch (e) {
-      if (_isHealthConnected) {
-        _isHealthConnected = false;
+      if (_isHealthTunnelConnected || _isHealthBackendConnected) {
+        _isHealthTunnelConnected = false;
+        _isHealthBackendConnected = false;
         notifyListeners();
       }
     }
@@ -531,8 +551,9 @@ class CameraService extends ChangeNotifier {
         ).timeout(const Duration(seconds: 30));
 
         if (garbageResponse.statusCode == 200) {
-          if (!_isGarbageConnected) {
-            _isGarbageConnected = true;
+          if (!_isGarbageTunnelConnected || !_isGarbageBackendConnected) {
+            _isGarbageTunnelConnected = true;
+            _isGarbageBackendConnected = true;
             notifyListeners();
           }
           final resBody = json.decode(garbageResponse.body);
@@ -589,8 +610,9 @@ class CameraService extends ChangeNotifier {
         }
       } catch (e) {
         debugPrint("Garbage AI Error: $e");
-        if (_isGarbageConnected) {
-          _isGarbageConnected = false;
+        if (_isGarbageTunnelConnected || _isGarbageBackendConnected) {
+          _isGarbageTunnelConnected = false;
+          _isGarbageBackendConnected = false;
           notifyListeners();
         }
       }
@@ -612,8 +634,9 @@ class CameraService extends ChangeNotifier {
         ).timeout(const Duration(seconds: 30));
 
         if (healthResponse.statusCode == 200) {
-          if (!_isHealthConnected) {
-            _isHealthConnected = true;
+          if (!_isHealthTunnelConnected || !_isHealthBackendConnected) {
+            _isHealthTunnelConnected = true;
+            _isHealthBackendConnected = true;
             notifyListeners();
           }
           final resBody = json.decode(healthResponse.body);
@@ -651,6 +674,11 @@ class CameraService extends ChangeNotifier {
         }
       } catch (e) {
         debugPrint("Health AI Error: $e");
+        if (_isHealthTunnelConnected || _isHealthBackendConnected) {
+          _isHealthTunnelConnected = false;
+          _isHealthBackendConnected = false;
+          notifyListeners();
+        }
       }
 
       latestResult = combinedResult;
