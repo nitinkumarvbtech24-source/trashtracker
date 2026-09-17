@@ -21,6 +21,9 @@ class CameraService extends ChangeNotifier {
   factory CameraService() => _instance;
   CameraService._internal();
 
+  List<Map<String, dynamic>> _cachedWards = [];
+  List<Map<String, dynamic>> _cachedZones = [];
+
   CameraController? _controller;
   List<CameraDescription> _cameras = [];
   bool _isRecording = false;
@@ -385,6 +388,7 @@ class CameraService extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       _isTrainingAutoMode = prefs.getBool('trainingAutoMode') ?? true;
       await loadSpeedRules();
+      await _fetchWardsAndZones();
 
       startHealthCheck();
       errorMessage = null;
@@ -530,7 +534,25 @@ class CameraService extends ChangeNotifier {
       // Get real vehicle and ward details
       final prefs = await SharedPreferences.getInstance();
       final vehicleNumber = prefs.getString('vehicleNumber') ?? 'Unknown Vehicle';
-      final ward = prefs.getString('assignedWard') ?? 'Unknown Ward';
+      final assignedWard = prefs.getString('assignedWard') ?? 'Unknown Ward';
+
+      String calculatedWard = 'Unknown Ward';
+      String calculatedZone = 'Unknown Zone';
+      
+      for (var w in _cachedWards) {
+        if (_isPointInPolygon(lat, lng, w['boundary'])) {
+          calculatedWard = w['name'];
+          break;
+        }
+      }
+      if (calculatedWard == 'Unknown Ward') calculatedWard = assignedWard;
+      
+      for (var z in _cachedZones) {
+        if (_isPointInPolygon(lat, lng, z['boundary'])) {
+          calculatedZone = z['name'];
+          break;
+        }
+      }
 
       Map<String, dynamic> combinedResult = {};
 
@@ -544,7 +566,8 @@ class CameraService extends ChangeNotifier {
             'lat': lat,
             'lng': lng,
             'vehicle_number': vehicleNumber,
-            'ward': ward,
+            'ward': calculatedWard,
+            'zone': calculatedZone,
             if (sessionId != null) 'session_id': sessionId,
             if (pointType != null) 'point_type': pointType
           }),
@@ -598,7 +621,8 @@ class CameraService extends ChangeNotifier {
                   'timestamp': FieldValue.serverTimestamp(),
                   'status': 'Flagged',
                   'vehicle_number': vehicleNumber,
-                  'ward': ward,
+                  'ward': calculatedWard,
+                  'zone': calculatedZone,
                   if (sessionId != null) 'session_id': sessionId,
                   if (pointType != null) 'point_type': pointType,
                 });
@@ -627,7 +651,8 @@ class CameraService extends ChangeNotifier {
             'lat': lat,
             'lng': lng,
             'vehicle_number': vehicleNumber,
-            'ward': ward,
+            'ward': calculatedWard,
+            'zone': calculatedZone,
             if (sessionId != null) 'session_id': sessionId,
             if (pointType != null) 'point_type': pointType
           }),
@@ -662,9 +687,9 @@ class CameraService extends ChangeNotifier {
                   'image_url': '$HEALTH_AI_URL$imageUrl',
                   'timestamp': FieldValue.serverTimestamp(),
                   'vehicle_number': vehicleNumber,
-                  'ward': ward,
+                  'ward': calculatedWard,
                   'status': 'Flagged',
-                  'zone': prefs.getString('assignedZone') ?? 'Unknown Zone',
+                  'zone': calculatedZone,
                 });
               } catch (e) {
                 debugPrint("Error saving to Firestore: $e");
