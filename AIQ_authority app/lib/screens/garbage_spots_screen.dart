@@ -263,40 +263,43 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
           const SizedBox(height: 24),
 
           // Row 2: Filters
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey.shade300),
-                  borderRadius: BorderRadius.circular(6),
-                  color: const Color(0xFFF8FAFC),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.grey.shade300),
+                    borderRadius: BorderRadius.circular(6),
+                    color: const Color(0xFFF8FAFC),
+                  ),
+                  child: Row(
+                    children: [
+                      const Text('Role: ', style: TextStyle(color: Color(0xFF64748B), fontSize: 14)),
+                      Text(RoleService.currentUserRoleTitle ?? 'None', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black)),
+                    ],
+                  ),
                 ),
-                child: Row(
-                  children: [
-                    const Text('Role: ', style: TextStyle(color: Color(0xFF64748B), fontSize: 14)),
-                    Text(RoleService.currentUserRoleTitle ?? 'None', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black)),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12),
-              _buildDropdownFilter(validSelectedZone, zonesList, (val) {
-                if (val != null) setState(() => _filterZone = val);
-              }),
-              const SizedBox(width: 12),
-              _buildDropdownFilter(validSelectedWard, wardsList, (val) {
-                if (val != null) setState(() => _filterWard = val);
-              }),
-              const SizedBox(width: 12),
-              _buildDropdownFilter(_filterSeverity, ['All Severity', 'High', 'Medium', 'Low'], (val) {
-                if (val != null) setState(() => _filterSeverity = val);
-              }),
-              const SizedBox(width: 12),
-              _buildDateRangeFilter(),
-              const Spacer(),
-              IconButton(onPressed: () {}, icon: const Icon(LucideIcons.filter, color: Color(0xFF64748B))),
-              const Text('Filter', style: TextStyle(color: Color(0xFF344054), fontWeight: FontWeight.w600)),
-            ],
+                const SizedBox(width: 12),
+                _buildDropdownFilter(validSelectedZone, zonesList, (val) {
+                  if (val != null) setState(() => _filterZone = val);
+                }),
+                const SizedBox(width: 12),
+                _buildDropdownFilter(validSelectedWard, wardsList, (val) {
+                  if (val != null) setState(() => _filterWard = val);
+                }),
+                const SizedBox(width: 12),
+                _buildDropdownFilter(_filterSeverity, ['All Severity', 'High', 'Medium', 'Low'], (val) {
+                  if (val != null) setState(() => _filterSeverity = val);
+                }),
+                const SizedBox(width: 12),
+                _buildDateRangeFilter(),
+                const SizedBox(width: 24),
+                IconButton(onPressed: () {}, icon: const Icon(LucideIcons.filter, color: Color(0xFF64748B))),
+                const Text('Filter', style: TextStyle(color: Color(0xFF344054), fontWeight: FontWeight.w600)),
+              ],
+            ),
           ),
           const SizedBox(height: 24),
 

@@ -313,34 +313,37 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
           Container(
              color: Colors.white,
              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-             child: Row(
-               children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(
-                      border: Border.all(color: Colors.grey.shade300),
-                      borderRadius: BorderRadius.circular(6),
-                      color: const Color(0xFFF8FAFC),
+             child: SingleChildScrollView(
+               scrollDirection: Axis.horizontal,
+               child: Row(
+                 children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.grey.shade300),
+                        borderRadius: BorderRadius.circular(6),
+                        color: const Color(0xFFF8FAFC),
+                      ),
+                      child: Row(
+                        children: [
+                          const Text('Role: ', style: TextStyle(color: Color(0xFF64748B), fontSize: 14)),
+                          Text(RoleService.currentUserRoleTitle ?? 'None', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black)),
+                        ],
+                      ),
                     ),
-                    child: Row(
-                      children: [
-                        const Text('Role: ', style: TextStyle(color: Color(0xFF64748B), fontSize: 14)),
-                        Text(RoleService.currentUserRoleTitle ?? 'None', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black)),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  _buildDropdown('Zone', validSelectedZone, zonesList, (val) => setState(() { _selectedZoneFilter = val!; _selectedWardFilter = 'All Wards'; })),
-                  const SizedBox(width: 16),
-                  _buildDropdown('Ward', validSelectedWard, wardsList, (val) => setState(() => _selectedWardFilter = val!)),
-                  const Spacer(),
-                  _buildDropdown('', _selectedStatusFilter, ['All Status', 'Active', 'Idle', 'Inactive'], (val) => setState(() => _selectedStatusFilter = val!)),
-                  const SizedBox(width: 16),
-                  Container(
-                    decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade300), borderRadius: BorderRadius.circular(8)),
-                    child: IconButton(icon: const Icon(LucideIcons.refreshCw, size: 18, color: Color(0xFF4B5563)), onPressed: _fetchDataFromFirestore),
-                  )
-               ]
+                    const SizedBox(width: 16),
+                    _buildDropdown('Zone', validSelectedZone, zonesList, (val) => setState(() { _selectedZoneFilter = val!; _selectedWardFilter = 'All Wards'; })),
+                    const SizedBox(width: 16),
+                    _buildDropdown('Ward', validSelectedWard, wardsList, (val) => setState(() => _selectedWardFilter = val!)),
+                    const SizedBox(width: 24),
+                    _buildDropdown('', _selectedStatusFilter, ['All Status', 'Active', 'Idle', 'Inactive'], (val) => setState(() => _selectedStatusFilter = val!)),
+                    const SizedBox(width: 16),
+                    Container(
+                      decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade300), borderRadius: BorderRadius.circular(8)),
+                      child: IconButton(icon: const Icon(LucideIcons.refreshCw, size: 18, color: Color(0xFF4B5563)), onPressed: _fetchDataFromFirestore),
+                    )
+                 ]
+               ),
              )
           ),
           Expanded(

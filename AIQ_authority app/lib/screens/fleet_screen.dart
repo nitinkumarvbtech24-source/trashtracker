@@ -377,57 +377,59 @@ class _FleetScreenState extends State<FleetScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
       color: Colors.white,
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.grey.shade300),
-              borderRadius: BorderRadius.circular(6),
-              color: const Color(0xFFF8FAFC),
-            ),
-            child: Row(
-              children: [
-                const Text('Role: ', style: TextStyle(color: Color(0xFF64748B), fontSize: 14)),
-                Text(RoleService.currentUserRoleTitle ?? 'None', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black)),
-              ],
-            ),
-          ),
-          const SizedBox(width: 16),
-          _buildDropdown('Zone', validSelectedZone, zonesList, (v) {
-            setState(() { _selectedZoneFilter = v; _selectedWardFilter = 'All Wards'; _updateMapForSelection(); });
-          }),
-          const SizedBox(width: 16),
-          _buildDropdown('Ward', validSelectedWard, wards, (v) {
-            setState(() { _selectedWardFilter = v; _updateMapForSelection(); });
-          }),
-          const SizedBox(width: 16),
-          // Date Picker mimicking mockup
-          InkWell(
-            onTap: () => _pickDate(context),
-            borderRadius: BorderRadius.circular(8),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(border: Border.all(color: const Color(0xFFE5E7EB)), borderRadius: BorderRadius.circular(8)),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey.shade300),
+                borderRadius: BorderRadius.circular(6),
+                color: const Color(0xFFF8FAFC),
+              ),
               child: Row(
                 children: [
-                  const Icon(LucideIcons.calendar, size: 16, color: Color(0xFF6B7280)),
-                  const SizedBox(width: 8),
-                  Text(
-                    _isDaily 
-                      ? _formatDate(_selectedDate) 
-                      : '${_formatDate(DateTime(_selectedDate.year, _selectedDate.month, 1))} - ${_formatDate(DateTime(_selectedDate.year, _selectedDate.month + 1, 0))}', 
-                    style: GoogleFonts.inter(fontWeight: FontWeight.w600, color: const Color(0xFF111827), fontSize: 13)
-                  ),
-                  const SizedBox(width: 8),
-                  const Icon(Icons.keyboard_arrow_down, size: 16, color: Color(0xFF6B7280)),
+                  const Text('Role: ', style: TextStyle(color: Color(0xFF64748B), fontSize: 14)),
+                  Text(RoleService.currentUserRoleTitle ?? 'None', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black)),
                 ],
               ),
             ),
-          ),
-          const Spacer(),
-          // Toggle
-          Container(
+            const SizedBox(width: 16),
+            _buildDropdown('Zone', validSelectedZone, zonesList, (v) {
+              setState(() { _selectedZoneFilter = v; _selectedWardFilter = 'All Wards'; _updateMapForSelection(); });
+            }),
+            const SizedBox(width: 16),
+            _buildDropdown('Ward', validSelectedWard, wards, (v) {
+              setState(() { _selectedWardFilter = v; _updateMapForSelection(); });
+            }),
+            const SizedBox(width: 16),
+            // Date Picker mimicking mockup
+            InkWell(
+              onTap: () => _pickDate(context),
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(border: Border.all(color: const Color(0xFFE5E7EB)), borderRadius: BorderRadius.circular(8)),
+                child: Row(
+                  children: [
+                    const Icon(LucideIcons.calendar, size: 16, color: Color(0xFF6B7280)),
+                    const SizedBox(width: 8),
+                    Text(
+                      _isDaily 
+                        ? _formatDate(_selectedDate) 
+                        : '${_formatDate(DateTime(_selectedDate.year, _selectedDate.month, 1))} - ${_formatDate(DateTime(_selectedDate.year, _selectedDate.month + 1, 0))}', 
+                      style: GoogleFonts.inter(fontWeight: FontWeight.w600, color: const Color(0xFF111827), fontSize: 13)
+                    ),
+                    const SizedBox(width: 8),
+                    const Icon(Icons.keyboard_arrow_down, size: 16, color: Color(0xFF6B7280)),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 24),
+            // Toggle
+            Container(
             decoration: BoxDecoration(border: Border.all(color: const Color(0xFFE5E7EB)), borderRadius: BorderRadius.circular(8)),
             child: Row(
               children: [
