@@ -16,6 +16,7 @@ import 'package:flutter_map_cache/flutter_map_cache.dart';
 import '../services/map_cache_service.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'garbage_spots_screen.dart';
+import '../services/role_service.dart';
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
 
@@ -226,14 +227,47 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  List<Vehicle> get _filteredVehicles {
+    final bool hasAllAccess = RoleService.hasAllAccess('Master Dashboard');
+    final List<String> allowedWards = RoleService.getAllowedWardsForModule('Master Dashboard');
+    final List<String> allowedZones = RoleService.getAllowedZonesForModule('Master Dashboard');
+
+    return _vehicles.where((v) {
+      if (!hasAllAccess && !allowedWards.contains('All Wards') && !allowedZones.contains('All Zones')) {
+        bool isAllowed = allowedWards.contains(v.assignedWard);
+        if (!isAllowed) {
+          for (String zName in allowedZones) {
+            try {
+              final zone = _zonesList.firstWhere((z) => z.name == zName);
+              final ward = _wardsList.firstWhere((w) => w.name == v.assignedWard);
+              if (_isWardInZone(ward, zone)) {
+                isAllowed = true;
+                break;
+              }
+            } catch (_) {}
+          }
+        }
+        if (!isAllowed) return false;
+      }
+
+      if (_selectedWard != 'All Wards' && v.assignedWard != _selectedWard) return false;
+      if (_selectedZone != 'All Zones' && _selectedWard == 'All Wards') {
+        try {
+          final zone = _zonesList.firstWhere((z) => z.name == _selectedZone);
+          final ward = _wardsList.firstWhere((w) => w.name == v.assignedWard);
+          if (!_isWardInZone(ward, zone)) return false;
+        } catch (_) {}
+      }
+      return true;
+    }).toList();
+  }
+
   void _updateMapForSelection() {
     List<LatLng> points = [];
-    var filteredVehicles = _vehicles;
+    var filteredVehicles = _filteredVehicles;
     
     // 1. Gather points from Ward if selected
     if (_selectedWard != 'All Wards') {
-      filteredVehicles = filteredVehicles.where((v) => v.assignedWard == _selectedWard).toList();
-      
       try {
         final ward = _wardsList.firstWhere((w) => w.name == _selectedWard);
         if (ward.boundary.isNotEmpty) points.addAll(ward.boundary);
@@ -324,8 +358,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void _centerOnCurrentLocation() {
     if (_currentLocation != null) {
       _mapController.move(_currentLocation!, 15.0);
-    } else if (_vehicles.isNotEmpty && _vehicles.first.currentLocation != null) {
-      _mapController.move(_vehicles.first.currentLocation!, 15.0);
+    } else if (_filteredVehicles.isNotEmpty && _filteredVehicles.first.currentLocation != null) {
+      _mapController.move(_filteredVehicles.first.currentLocation!, 15.0);
     }
   }
 
@@ -492,7 +526,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Vehicles in ${_selectedWard == 'All Wards' ? 'All Wards' : _selectedWard} (${_vehicles.length})', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              Text('Vehicles in ${_selectedWard == 'All Wards' ? 'All Wards' : _selectedWard} (${_filteredVehicles.length})', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
             ],
           ),
           const SizedBox(height: 16),
@@ -524,10 +558,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
           const SizedBox(height: 16),
           Expanded(
             child: ListView.separated(
-              itemCount: _vehicles.length,
+              itemCount: _filteredVehicles.length,
               separatorBuilder: (context, index) => const SizedBox(height: 12),
               itemBuilder: (context, index) {
-                final vehicle = _vehicles[index];
+                final vehicle = _filteredVehicles[index];
                 bool isSelected = _selectedFleetVehicle?.id == vehicle.id;
                 
                 String stateText = 'Offline';
@@ -830,21 +864,56 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
 
   Widget _buildFilterRow() {
-    List<String> availableWards = [];
-    if (_selectedZone != 'All Zones') {
-      final sZone = _zonesList.firstWhere((z) => z.name == _selectedZone, orElse: () => Zone(id: '', name: '', boundary: []));
-      if (sZone.boundary.isNotEmpty) {
-        availableWards = _wardsList
-            .where((w) => w.boundary.isNotEmpty && _isWardInZone(w, sZone))
-            .map((w) => w.name)
-            .toList();
-      }
-    } else {
-      availableWards = _wardsList.map((w) => w.name).toList();
+    final bool hasAllAccess = RoleService.hasAllAccess('Master Dashboard');
+    final List<String> allowedZones = RoleService.getAllowedZonesForModule('Master Dashboard');
+    final List<String> allowedWards = RoleService.getAllowedWardsForModule('Master Dashboard');
+
+    List<String> zItems = (hasAllAccess ? _zonesList.map((z) => z.name).toList() : allowedZones).toList();
+    if (zItems.isNotEmpty && !zItems.contains('All Zones')) {
+      zItems.insert(0, 'All Zones');
     }
-    
-    final wards = ['All Wards', ...availableWards.toSet()];
-    final zones = ['All Zones', ..._zonesList.map((z) => z.name).toSet()];
+    final zones = zItems.isEmpty ? ['All Zones'] : zItems;
+
+    // Auto-correct _selectedZone without calling setState during build
+    String validSelectedZone = _selectedZone;
+    if (!zones.contains(validSelectedZone) && zones.isNotEmpty) {
+      validSelectedZone = zones.first;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _selectedZone != validSelectedZone) {
+          setState(() {
+            _selectedZone = validSelectedZone;
+            _updateMapForSelection();
+          });
+        }
+      });
+    }
+
+    List<String> wItems = _wardsList.where((w) {
+      if (!hasAllAccess && !allowedWards.contains('All Wards') && !allowedWards.contains(w.name)) return false;
+      if (validSelectedZone == 'All Zones') return true;
+      try {
+        final z = _zonesList.firstWhere((zm) => zm.name == validSelectedZone);
+        return _isWardInZone(w, z);
+      } catch (_) { return false; }
+    }).map((w) => w.name).toList();
+
+    if (wItems.isNotEmpty && !wItems.contains('All Wards')) {
+      wItems.insert(0, 'All Wards');
+    }
+    final wards = wItems.isEmpty ? ['All Wards'] : wItems;
+
+    String validSelectedWard = _selectedWard;
+    if (!wards.contains(validSelectedWard) && wards.isNotEmpty) {
+      validSelectedWard = wards.first;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _selectedWard != validSelectedWard) {
+          setState(() {
+            _selectedWard = validSelectedWard;
+            _updateMapForSelection();
+          });
+        }
+      });
+    }
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -857,14 +926,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
         scrollDirection: Axis.horizontal,
         child: Row(
           children: [
-            _buildDropdown('Role', _selectedRole, ['Master Admin', 'Zone Admin'], (val) => setState(() => _selectedRole = val)),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey.shade300),
+                borderRadius: BorderRadius.circular(6),
+                color: const Color(0xFFF8FAFC),
+              ),
+              child: Row(
+                children: [
+                  const Text('Role: ', style: TextStyle(color: Color(0xFF64748B), fontSize: 14)),
+                  Text(RoleService.currentUserRoleTitle ?? 'None', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black)),
+                ],
+              ),
+            ),
             const SizedBox(width: 16),
-            _buildDropdown('Zone', _selectedZone, zones, (val) {
+            _buildDropdown('Zone', validSelectedZone, zones, (val) {
               setState(() => _selectedZone = val);
               _updateMapForSelection();
             }),
             const SizedBox(width: 16),
-            _buildDropdown('Ward', _selectedWard, wards, (val) {
+            _buildDropdown('Ward', validSelectedWard, wards, (val) {
               setState(() => _selectedWard = val);
               _updateMapForSelection();
             }),
@@ -988,7 +1070,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _buildKpiGrid() {
     return Row(
       children: [
-        Expanded(child: _buildNewKpiCard('Total Fleet', '${_vehicles.length}', 'Vehicles', LucideIcons.truck, const Color(0xFF198754), '+ 12%')),
+        Expanded(child: _buildNewKpiCard('Total Fleet', '${_filteredVehicles.length}', 'Vehicles', LucideIcons.truck, const Color(0xFF198754), '+ 12%')),
         const SizedBox(width: 16),
         Expanded(
           child: InkWell(
@@ -1304,7 +1386,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 ),
                               ),
                             ),
-                          ..._vehicles.where((v) => v.currentLocation != null && v.isRunning).map((vehicle) {
+                          ..._filteredVehicles.where((v) => v.currentLocation != null && v.isRunning).map((vehicle) {
                             return Marker(
                               point: vehicle.currentLocation!, width: 100, height: 60,
                               alignment: Alignment.center,
@@ -1446,7 +1528,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     style: const TextStyle(color: Color(0xFF1E293B), fontSize: 16, fontWeight: FontWeight.bold),
                     children: [
                       const TextSpan(text: 'Registered Vehicles '),
-                      TextSpan(text: '(${_vehicles.length})', style: const TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.normal)),
+                      TextSpan(text: '(${_filteredVehicles.length})', style: const TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.normal)),
                     ],
                   ),
                 ),
@@ -1499,7 +1581,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     DataColumn(label: Text('Status', style: TextStyle(color: Color(0xFF64748B), fontSize: 12))),
                     DataColumn(label: Text('Details', style: TextStyle(color: Color(0xFF64748B), fontSize: 12))),
                   ],
-                  rows: _vehicles.isEmpty 
+                  rows: _filteredVehicles.isEmpty 
                       ? [
                           const DataRow(cells: [
                             DataCell(Text('No vehicles found')),
@@ -1511,7 +1593,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             DataCell(Text('')),
                           ])
                         ]
-                      : _vehicles.map((v) {
+                      : _filteredVehicles.map((v) {
                           return _buildTableRow(
                             v,
                             v.vehicleNumber.isNotEmpty ? v.vehicleNumber : v.id,
@@ -1532,7 +1614,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Showing ${_vehicles.length} of ${_vehicles.length} vehicles', style: const TextStyle(color: Color(0xFF64748B), fontSize: 12)),
+                Text('Showing ${_filteredVehicles.length} of ${_filteredVehicles.length} vehicles', style: const TextStyle(color: Color(0xFF64748B), fontSize: 12)),
               ],
             ),
           )

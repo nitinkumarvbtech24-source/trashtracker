@@ -14,6 +14,8 @@ import '../mock_data.dart';
 import '../services/map_cache_service.dart';
 import '../models/vehicle.dart';
 import '../models/ward.dart';
+import '../models/zone.dart';
+import '../services/role_service.dart';
 import 'vehicle_details_screen.dart';
 
 class ActiveFleetScreen extends StatefulWidget {
@@ -31,9 +33,12 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
   List<Vehicle> _vehicles = [];
   List<Ward> _wards = [];
   
+  List<Zone> _zones = [];
+
   StreamSubscription? _liveTrackingSub;
   StreamSubscription? _vehiclesSub;
   StreamSubscription? _wardsSub;
+  StreamSubscription? _zonesSub;
   Map<String, Map<String, dynamic>> _liveTrackingData = {};
 
   String _searchQuery = '';
@@ -90,6 +95,12 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
         }
       });
     });
+
+    _zonesSub = FirebaseFirestore.instance.collection('zones').snapshots().listen((snapshot) {
+      final zones = snapshot.docs.map((doc) => Zone.fromJson(doc.id, doc.data())).toList();
+      if (!mounted) return;
+      setState(() => _zones = zones);
+    });
   }
 
   void _startLiveTrackingListener() {
@@ -127,7 +138,35 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
     _liveTrackingSub?.cancel();
     _vehiclesSub?.cancel();
     _wardsSub?.cancel();
+    _zonesSub?.cancel();
     super.dispose();
+  }
+
+  bool _isWardInZone(Ward ward, Zone zone) {
+    if (ward.boundary.isEmpty || zone.boundary.isEmpty) return true; // Fallback for dummy data without bounds
+    double cLat = 0, cLng = 0;
+    for(var p in ward.boundary) { cLat += p.latitude; cLng += p.longitude; }
+    LatLng centroid = LatLng(cLat / ward.boundary.length, cLng / ward.boundary.length);
+
+    int intersectCount = 0;
+    for (int j = 0; j < zone.boundary.length - 1; j++) {
+      if (_rayCastIntersect(centroid, zone.boundary[j], zone.boundary[j + 1])) {
+        intersectCount++;
+      }
+    }
+    if (_rayCastIntersect(centroid, zone.boundary.last, zone.boundary.first)) intersectCount++;
+    return (intersectCount % 2) == 1;
+  }
+
+  bool _rayCastIntersect(LatLng point, LatLng vertA, LatLng vertB) {
+    double aY = vertA.latitude, bY = vertB.latitude;
+    double aX = vertA.longitude, bX = vertB.longitude;
+    double pY = point.latitude, pX = point.longitude;
+    if ((aY > pY && bY > pY) || (aY < pY && bY < pY) || (aX < pX && bX < pX)) return false;
+    if (aY == bY) return false;
+    double m = (aX - bX) / (aY - bY);
+    double x = aX + m * (pY - aY);
+    return x > pX;
   }
 
   void _navigateToDetails(Vehicle vehicle) {
@@ -142,13 +181,86 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final bool hasAllAccess = RoleService.hasAllAccess('Fleets & Routes');
+    final List<String> allowedZones = RoleService.getAllowedZonesForModule('Fleets & Routes');
+    final List<String> allowedWards = RoleService.getAllowedWardsForModule('Fleets & Routes');
+
+    List<String> zItems = (hasAllAccess ? _zones.map((z) => z.name).toList() : allowedZones).toList();
+    if (zItems.isNotEmpty && !zItems.contains('All Zones')) {
+      zItems.insert(0, 'All Zones');
+    }
+    final zonesList = zItems.isEmpty ? ['All Zones'] : zItems;
+
+    String validSelectedZone = _selectedZoneFilter;
+    if (!zonesList.contains(validSelectedZone) && zonesList.isNotEmpty) {
+      validSelectedZone = zonesList.first;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _selectedZoneFilter != validSelectedZone) {
+          setState(() {
+            _selectedZoneFilter = validSelectedZone;
+          });
+        }
+      });
+    }
+
+    List<String> wItems = _wards.where((w) {
+      if (!hasAllAccess && !allowedWards.contains('All Wards') && !allowedWards.contains(w.name)) return false;
+      if (validSelectedZone == 'All Zones') return true;
+      try {
+        final z = _zones.firstWhere((zm) => zm.name == validSelectedZone);
+        return _isWardInZone(w, z);
+      } catch (_) { return false; }
+    }).map((w) => w.name).toList();
+
+    if (wItems.isNotEmpty && !wItems.contains('All Wards')) {
+      wItems.insert(0, 'All Wards');
+    }
+    final wardsList = wItems.isEmpty ? ['All Wards'] : wItems;
+
+    String validSelectedWard = _selectedWardFilter;
+    if (!wardsList.contains(validSelectedWard) && wardsList.isNotEmpty) {
+      validSelectedWard = wardsList.first;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _selectedWardFilter != validSelectedWard) {
+          setState(() {
+            _selectedWardFilter = validSelectedWard;
+          });
+        }
+      });
+    }
+
     List<Vehicle> filteredVehicles = _vehicles.where((v) {
+      if (!hasAllAccess && !allowedWards.contains('All Wards') && !allowedZones.contains('All Zones')) {
+        bool isAllowed = allowedWards.contains(v.assignedWard);
+        if (!isAllowed) {
+          for (String zName in allowedZones) {
+            try {
+              final zone = _zones.firstWhere((z) => z.name == zName);
+              final ward = _wards.firstWhere((w) => w.name == v.assignedWard);
+              if (_isWardInZone(ward, zone)) {
+                isAllowed = true;
+                break;
+              }
+            } catch (_) {}
+          }
+        }
+        if (!isAllowed) return false;
+      }
+      
       bool matchesSearch = _searchQuery.isEmpty || 
         v.vehicleNumber.toLowerCase().contains(_searchQuery.toLowerCase()) || 
         v.driverName.toLowerCase().contains(_searchQuery.toLowerCase()) || 
         v.assignedWard.toLowerCase().contains(_searchQuery.toLowerCase());
       
-      bool matchesWard = _selectedWardFilter == 'All Wards' || v.assignedWard == _selectedWardFilter;
+      bool matchesWard = validSelectedWard == 'All Wards' || v.assignedWard == validSelectedWard;
+      bool matchesZone = true;
+      if (validSelectedZone != 'All Zones' && validSelectedWard == 'All Wards') {
+        try {
+          final zone = _zones.firstWhere((z) => z.name == validSelectedZone);
+          final ward = _wards.firstWhere((w) => w.name == v.assignedWard);
+          if (!_isWardInZone(ward, zone)) matchesZone = false;
+        } catch (_) {}
+      }
       
       bool matchesStatus = true;
       if (_selectedStatusFilter != 'All Status') {
@@ -157,7 +269,7 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
          if (_selectedStatusFilter == 'Inactive') matchesStatus = v.statusText == 'Inactive';
       }
       
-      return matchesSearch && matchesWard && matchesStatus;
+      return matchesSearch && matchesWard && matchesZone && matchesStatus;
     }).toList();
 
     return Scaffold(
@@ -203,9 +315,24 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
              child: Row(
                children: [
-                  _buildDropdown('Zone', _selectedZoneFilter, ['All Zones', 'North', 'South', 'East', 'West'], (val) => setState(() => _selectedZoneFilter = val!)),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.grey.shade300),
+                      borderRadius: BorderRadius.circular(6),
+                      color: const Color(0xFFF8FAFC),
+                    ),
+                    child: Row(
+                      children: [
+                        const Text('Role: ', style: TextStyle(color: Color(0xFF64748B), fontSize: 14)),
+                        Text(RoleService.currentUserRoleTitle ?? 'None', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black)),
+                      ],
+                    ),
+                  ),
                   const SizedBox(width: 16),
-                  _buildDropdown('Ward', _selectedWardFilter, ['All Wards', ..._wards.map((e)=>e.name)], (val) => setState(() => _selectedWardFilter = val!)),
+                  _buildDropdown('Zone', validSelectedZone, zonesList, (val) => setState(() { _selectedZoneFilter = val!; _selectedWardFilter = 'All Wards'; })),
+                  const SizedBox(width: 16),
+                  _buildDropdown('Ward', validSelectedWard, wardsList, (val) => setState(() => _selectedWardFilter = val!)),
                   const Spacer(),
                   _buildDropdown('', _selectedStatusFilter, ['All Status', 'Active', 'Idle', 'Inactive'], (val) => setState(() => _selectedStatusFilter = val!)),
                   const SizedBox(width: 16),

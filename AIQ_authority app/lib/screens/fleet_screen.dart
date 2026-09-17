@@ -13,6 +13,7 @@ import '../models/vehicle.dart';
 import '../models/ward.dart';
 import '../models/zone.dart';
 import '../services/map_cache_service.dart';
+import '../services/role_service.dart';
 
 enum MapMode { view, drawWard, drawZone }
 
@@ -194,6 +195,41 @@ class _FleetScreenState extends State<FleetScreen> {
     return x > pX;
   }
 
+  List<Vehicle> get _filteredVehicles {
+    final bool hasAllAccess = RoleService.hasAllAccess('Fleets & Routes');
+    final List<String> allowedWards = RoleService.getAllowedWardsForModule('Fleets & Routes');
+    final List<String> allowedZones = RoleService.getAllowedZonesForModule('Fleets & Routes');
+
+    return _vehicles.where((v) {
+      if (!hasAllAccess && !allowedWards.contains('All Wards') && !allowedZones.contains('All Zones')) {
+        bool isAllowed = allowedWards.contains(v.assignedWard);
+        if (!isAllowed) {
+          for (String zName in allowedZones) {
+            try {
+              final zone = _zones.firstWhere((z) => z.name == zName);
+              final ward = _wards.firstWhere((w) => w.name == v.assignedWard);
+              if (_isWardInZone(ward, zone)) {
+                isAllowed = true;
+                break;
+              }
+            } catch (_) {}
+          }
+        }
+        if (!isAllowed) return false;
+      }
+
+      if (_selectedWardFilter != 'All Wards' && v.assignedWard != _selectedWardFilter) return false;
+      if (_selectedZoneFilter != 'All Zones' && _selectedWardFilter == 'All Wards') {
+        try {
+          final zone = _zones.firstWhere((z) => z.name == _selectedZoneFilter);
+          final ward = _wards.firstWhere((w) => w.name == v.assignedWard);
+          if (!_isWardInZone(ward, zone)) return false;
+        } catch (_) {}
+      }
+      return true;
+    }).toList();
+  }
+
   void _updateMapForSelection() {
     List<LatLng> points = [];
     if (_selectedWardFilter != 'All Wards') {
@@ -288,30 +324,81 @@ class _FleetScreenState extends State<FleetScreen> {
   }
 
   Widget _buildFilterBar() {
-    List<String> zonesList = ['All Zones', ..._zones.map((z) => z.name).toSet()];
-    List<String> availableWards = [];
-    if (_selectedZoneFilter != 'All Zones') {
-      final sZone = _zones.firstWhere((z) => z.name == _selectedZoneFilter, orElse: () => Zone(id: '', name: '', boundary: []));
-      if (sZone.boundary.isNotEmpty) {
-        availableWards = _wards.where((w) => w.boundary.isNotEmpty && _isWardInZone(w, sZone)).map((w) => w.name).toList();
-      }
-    } else {
-      availableWards = _wards.map((w) => w.name).toList();
+    final bool hasAllAccess = RoleService.hasAllAccess('Fleets & Routes');
+    final List<String> allowedZones = RoleService.getAllowedZonesForModule('Fleets & Routes');
+    final List<String> allowedWards = RoleService.getAllowedWardsForModule('Fleets & Routes');
+
+    List<String> zItems = (hasAllAccess ? _zones.map((z) => z.name).toList() : allowedZones).toList();
+    if (zItems.isNotEmpty && !zItems.contains('All Zones')) {
+      zItems.insert(0, 'All Zones');
     }
-    
-    final wards = ['All Wards', ...availableWards.toSet()];
-    if (!wards.contains(_selectedWardFilter)) _selectedWardFilter = 'All Wards';
+    final zonesList = zItems.isEmpty ? ['All Zones'] : zItems;
+
+    String validSelectedZone = _selectedZoneFilter;
+    if (!zonesList.contains(validSelectedZone) && zonesList.isNotEmpty) {
+      validSelectedZone = zonesList.first;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _selectedZoneFilter != validSelectedZone) {
+          setState(() {
+            _selectedZoneFilter = validSelectedZone;
+            _updateMapForSelection();
+          });
+        }
+      });
+    }
+
+    List<String> wItems = _wards.where((w) {
+      if (!hasAllAccess && !allowedWards.contains('All Wards') && !allowedWards.contains(w.name)) return false;
+      if (validSelectedZone == 'All Zones') return true;
+      try {
+        final z = _zones.firstWhere((zm) => zm.name == validSelectedZone);
+        return _isWardInZone(w, z);
+      } catch (_) { return false; }
+    }).map((w) => w.name).toList();
+
+    if (wItems.isNotEmpty && !wItems.contains('All Wards')) {
+      wItems.insert(0, 'All Wards');
+    }
+    final wards = wItems.isEmpty ? ['All Wards'] : wItems;
+
+    String validSelectedWard = _selectedWardFilter;
+    if (!wards.contains(validSelectedWard) && wards.isNotEmpty) {
+      validSelectedWard = wards.first;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _selectedWardFilter != validSelectedWard) {
+          setState(() {
+            _selectedWardFilter = validSelectedWard;
+            _updateMapForSelection();
+          });
+        }
+      });
+    }
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
       color: Colors.white,
       child: Row(
         children: [
-          _buildDropdown('Zone', _selectedZoneFilter, zonesList, (v) {
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.grey.shade300),
+              borderRadius: BorderRadius.circular(6),
+              color: const Color(0xFFF8FAFC),
+            ),
+            child: Row(
+              children: [
+                const Text('Role: ', style: TextStyle(color: Color(0xFF64748B), fontSize: 14)),
+                Text(RoleService.currentUserRoleTitle ?? 'None', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 16),
+          _buildDropdown('Zone', validSelectedZone, zonesList, (v) {
             setState(() { _selectedZoneFilter = v; _selectedWardFilter = 'All Wards'; _updateMapForSelection(); });
           }),
           const SizedBox(width: 16),
-          _buildDropdown('Ward', _selectedWardFilter, wards, (v) {
+          _buildDropdown('Ward', validSelectedWard, wards, (v) {
             setState(() { _selectedWardFilter = v; _updateMapForSelection(); });
           }),
           const SizedBox(width: 16),
@@ -465,10 +552,9 @@ class _FleetScreenState extends State<FleetScreen> {
   }
 
   Widget _buildVehicleListPanel() {
-    List<Vehicle> filteredList = _vehicles.where((v) {
+    List<Vehicle> filteredList = _filteredVehicles.where((v) {
       bool matchesSearch = _searchQuery.isEmpty || v.vehicleNumber.toLowerCase().contains(_searchQuery.toLowerCase()) || (v.driverName.toLowerCase()).contains(_searchQuery.toLowerCase());
-      bool matchesWard = _selectedWardFilter == 'All Wards' || v.assignedWard == _selectedWardFilter;
-      return matchesSearch && matchesWard;
+      return matchesSearch;
     }).toList();
 
     return Container(
@@ -747,7 +833,7 @@ class _FleetScreenState extends State<FleetScreen> {
                         tileProvider: kIsWeb ? null : CachedTileProvider(store: MapCacheService.store),
                       ),
                       PolylineLayer(
-                        polylines: _vehicles.where((v) => v.assignedRoute != null && v.assignedRoute!.isNotEmpty).map((v) {
+                        polylines: _filteredVehicles.where((v) => v.assignedRoute != null && v.assignedRoute!.isNotEmpty).map((v) {
                           return Polyline(
                             points: v.assignedRoute!,
                             color: const Color(0xFF3B82F6),
@@ -918,7 +1004,7 @@ class _FleetScreenState extends State<FleetScreen> {
 
   List<Marker> _buildCustomMarkers() {
     List<Marker> markers = [];
-    for (var v in _vehicles) {
+    for (var v in _filteredVehicles) {
       if (v.currentLocation == null) continue;
       if (!v.isRunning) continue;
       Color statusColor = const Color(0xFFEF4444);

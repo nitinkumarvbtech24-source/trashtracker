@@ -9,6 +9,7 @@ import 'dart:async';
 import 'package:url_launcher/url_launcher.dart';
 import '../models/garbage_flag.dart';
 import '../widgets/ngrok_image.dart';
+import '../services/role_service.dart';
 
 class GarbageSpotsScreen extends StatefulWidget {
   const GarbageSpotsScreen({super.key});
@@ -159,9 +160,59 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
   }
 
   Widget _buildContent(bool isMobile) {
+    final bool hasAllAccess = RoleService.hasAllAccess('Street Cleanliness AI');
+    final List<String> allowedZones = RoleService.getAllowedZonesForModule('Street Cleanliness AI');
+    final List<String> allowedWards = RoleService.getAllowedWardsForModule('Street Cleanliness AI');
+
+    List<String> zItems = (hasAllAccess ? _allZones.where((z) => z != 'All Zones').toList() : allowedZones).toList();
+    if (zItems.isNotEmpty && !zItems.contains('All Zones')) {
+      zItems.insert(0, 'All Zones');
+    }
+    final zonesList = zItems.isEmpty ? ['All Zones'] : zItems;
+
+    String validSelectedZone = _filterZone;
+    if (!zonesList.contains(validSelectedZone) && zonesList.isNotEmpty) {
+      validSelectedZone = zonesList.first;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _filterZone != validSelectedZone) {
+          setState(() {
+            _filterZone = validSelectedZone;
+          });
+        }
+      });
+    }
+
+    List<String> wItems = _allWards.where((w) {
+      if (w == 'All Wards') return true;
+      if (!hasAllAccess && !allowedWards.contains('All Wards') && !allowedWards.contains(w)) return false;
+      return true;
+    }).toList();
+
+    if (wItems.isNotEmpty && !wItems.contains('All Wards')) {
+      wItems.insert(0, 'All Wards');
+    }
+    final wardsList = wItems.isEmpty ? ['All Wards'] : wItems;
+
+    String validSelectedWard = _filterWard;
+    if (!wardsList.contains(validSelectedWard) && wardsList.isNotEmpty) {
+      validSelectedWard = wardsList.first;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _filterWard != validSelectedWard) {
+          setState(() {
+            _filterWard = validSelectedWard;
+          });
+        }
+      });
+    }
+
     List<GarbageFlag> filteredFlags = _garbageFlags.where((flag) {
-      if (_filterZone != 'All Zones' && flag.ward != _filterZone && 'Central Zone' != _filterZone) return false; // Basic mock filter logic
-      if (_filterWard != 'All Wards' && flag.ward != _filterWard) return false;
+      if (!hasAllAccess && !allowedWards.contains('All Wards')) {
+        // If they don't have access to all wards, and their explicitly allowed wards doesn't contain this ward, block it.
+        // (Note: in a real app, you'd fetch the ward's zone here or from a backend to see if it belongs to their allowedZones)
+        if (!allowedWards.contains(flag.ward)) return false;
+      }
+      if (validSelectedZone != 'All Zones' && flag.ward != validSelectedZone && 'Central Zone' != validSelectedZone) return false; // Basic mock filter logic
+      if (validSelectedWard != 'All Wards' && flag.ward != validSelectedWard) return false;
       
       String severity = flag.className.contains('Very_Dirty') ? 'High' : 'Medium';
       if (_filterSeverity != 'All Severity' && severity != _filterSeverity) return false;
@@ -214,11 +265,26 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
           // Row 2: Filters
           Row(
             children: [
-              _buildDropdownFilter(_filterZone, _allZones, (val) {
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey.shade300),
+                  borderRadius: BorderRadius.circular(6),
+                  color: const Color(0xFFF8FAFC),
+                ),
+                child: Row(
+                  children: [
+                    const Text('Role: ', style: TextStyle(color: Color(0xFF64748B), fontSize: 14)),
+                    Text(RoleService.currentUserRoleTitle ?? 'None', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black)),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              _buildDropdownFilter(validSelectedZone, zonesList, (val) {
                 if (val != null) setState(() => _filterZone = val);
               }),
               const SizedBox(width: 12),
-              _buildDropdownFilter(_filterWard, _allWards, (val) {
+              _buildDropdownFilter(validSelectedWard, wardsList, (val) {
                 if (val != null) setState(() => _filterWard = val);
               }),
               const SizedBox(width: 12),
@@ -235,16 +301,25 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
           const SizedBox(height: 24),
 
           // Row 3: KPIs
-          Row(
-            children: [
-              Expanded(child: _buildKpiCard('Total Spots Identified Today', '124', '+ 12% from yesterday', LucideIcons.trash2, const Color(0xFFE6F4EA), const Color(0xFF198754), true)),
-              const SizedBox(width: 16),
-              Expanded(child: _buildKpiCard('Total Spots Cleared Today', '68', '+ 18% from yesterday', LucideIcons.checkCircle, const Color(0xFFE6F4EA), const Color(0xFF198754), true)),
-              const SizedBox(width: 16),
-              Expanded(child: _buildKpiCard('Remaining Spots to be Cleared', '56', '- 8% from yesterday', LucideIcons.clock, const Color(0xFFFFF3E0), const Color(0xFFF57C00), false)),
-              const SizedBox(width: 16),
-              Expanded(child: _buildKpiCard('Avg Cleanliness', '72%', '+ 5% from yesterday', LucideIcons.sparkles, const Color(0xFFE3F2FD), const Color(0xFF1E88E5), true)),
-            ],
+          Builder(
+            builder: (context) {
+              int totalSpots = filteredFlags.length;
+              int clearedSpots = filteredFlags.where((f) => f.className == 'Good_Condition' || f.className == 'Good Condition').length;
+              int remainingSpots = totalSpots - clearedSpots;
+              int avgCleanliness = totalSpots > 0 ? ((clearedSpots / totalSpots) * 100).toInt() : 100;
+
+              return Row(
+                children: [
+                  Expanded(child: _buildKpiCard('Total Spots Identified', '$totalSpots', 'Current filtered', LucideIcons.trash2, const Color(0xFFE6F4EA), const Color(0xFF198754), true)),
+                  const SizedBox(width: 16),
+                  Expanded(child: _buildKpiCard('Total Spots Cleared', '$clearedSpots', 'Current filtered', LucideIcons.checkCircle, const Color(0xFFE6F4EA), const Color(0xFF198754), true)),
+                  const SizedBox(width: 16),
+                  Expanded(child: _buildKpiCard('Remaining to be Cleared', '$remainingSpots', 'Current filtered', LucideIcons.clock, const Color(0xFFFFF3E0), const Color(0xFFF57C00), false)),
+                  const SizedBox(width: 16),
+                  Expanded(child: _buildKpiCard('Avg Cleanliness', '$avgCleanliness%', 'Current filtered', LucideIcons.sparkles, const Color(0xFFE3F2FD), const Color(0xFF1E88E5), true)),
+                ],
+              );
+            }
           ),
           const SizedBox(height: 24),
 

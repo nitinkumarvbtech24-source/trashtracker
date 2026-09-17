@@ -40,10 +40,35 @@ class RoleService {
 
   static String? _currentUserRoleTitle;
 
+  static String? get currentUserRoleTitle => _currentUserRoleTitle;
+
   static void _updateCurrentUserPermissions() {
     if (_currentUserRoleTitle != null && globalRoles != null) {
       currentUserPermissions.value = getRolePermissions(_currentUserRoleTitle!);
     }
+  }
+
+  static bool hasAllAccess(String moduleName) {
+    final perms = currentUserPermissions.value?[moduleName];
+    if (perms == null) return false;
+    if (perms['viewAccess'] == 'All Data (All Zones & Wards)') return true;
+    final zones = List<String>.from(perms['zones'] ?? []);
+    if (zones.contains('All Zones')) return true;
+    return false;
+  }
+
+  static List<String> getAllowedZonesForModule(String moduleName) {
+    if (hasAllAccess(moduleName)) return []; // Empty means all allowed
+    final perms = currentUserPermissions.value?[moduleName];
+    if (perms == null) return [];
+    return List<String>.from(perms['zones'] ?? []);
+  }
+
+  static List<String> getAllowedWardsForModule(String moduleName) {
+    if (hasAllAccess(moduleName)) return []; // Empty means all allowed
+    final perms = currentUserPermissions.value?[moduleName];
+    if (perms == null) return [];
+    return List<String>.from(perms['wards'] ?? []);
   }
 
   static List<Map<String, dynamic>> _getDefaultRoles(List<String> allZones, List<String> allWards) {
