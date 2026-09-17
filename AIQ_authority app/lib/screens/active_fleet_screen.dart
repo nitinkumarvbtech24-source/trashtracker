@@ -186,7 +186,7 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
     final List<String> allowedWards = RoleService.getAllowedWardsForModule('Fleets & Routes');
 
     List<String> zItems = (hasAllAccess ? _zones.map((z) => z.name).toList() : allowedZones).toList();
-    if (zItems.isNotEmpty && !zItems.contains('All Zones')) {
+    if (zItems.length > 1 && !zItems.contains('All Zones')) {
       zItems.insert(0, 'All Zones');
     }
     final zonesList = zItems.isEmpty ? ['All Zones'] : zItems;
@@ -212,7 +212,7 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
       } catch (_) { return false; }
     }).map((w) => w.name).toList();
 
-    if (wItems.isNotEmpty && !wItems.contains('All Wards')) {
+    if (wItems.length > 1 && !wItems.contains('All Wards')) {
       wItems.insert(0, 'All Wards');
     }
     final wardsList = wItems.isEmpty ? ['All Wards'] : wItems;

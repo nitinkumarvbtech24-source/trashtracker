@@ -869,7 +869,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final List<String> allowedWards = RoleService.getAllowedWardsForModule('Master Dashboard');
 
     List<String> zItems = (hasAllAccess ? _zonesList.map((z) => z.name).toList() : allowedZones).toList();
-    if (zItems.isNotEmpty && !zItems.contains('All Zones')) {
+    if (zItems.length > 1 && !zItems.contains('All Zones')) {
       zItems.insert(0, 'All Zones');
     }
     final zones = zItems.isEmpty ? ['All Zones'] : zItems;
@@ -897,7 +897,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       } catch (_) { return false; }
     }).map((w) => w.name).toList();
 
-    if (wItems.isNotEmpty && !wItems.contains('All Wards')) {
+    if (wItems.length > 1 && !wItems.contains('All Wards')) {
       wItems.insert(0, 'All Wards');
     }
     final wards = wItems.isEmpty ? ['All Wards'] : wItems;

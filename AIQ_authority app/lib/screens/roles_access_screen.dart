@@ -1490,7 +1490,7 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                         icon: const Icon(LucideIcons.chevronDown, size: 16, color: Color(0xFF64748B)),
                         items: (() {
                           List<String> zItems = (hasAllAccess ? _allZones : allowedZones).toList();
-                          if (zItems.isNotEmpty && !zItems.contains('All Zones')) {
+                          if (zItems.length > 1 && !zItems.contains('All Zones')) {
                             zItems.insert(0, 'All Zones');
                           } else if (zItems.isEmpty) {
                             return <DropdownMenuItem<String>>[];
@@ -1535,7 +1535,7 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                             } catch (_) { return false; }
                           }).map((w) => w.name).toList();
                           
-                          if (wItems.isNotEmpty && !wItems.contains('All Wards')) {
+                          if (wItems.length > 1 && !wItems.contains('All Wards')) {
                             wItems.insert(0, 'All Wards');
                           }
                           return wItems.map((w) {

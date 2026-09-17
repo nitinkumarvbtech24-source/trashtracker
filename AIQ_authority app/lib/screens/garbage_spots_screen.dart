@@ -165,7 +165,7 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
     final List<String> allowedWards = RoleService.getAllowedWardsForModule('Street Cleanliness AI');
 
     List<String> zItems = (hasAllAccess ? _allZones.where((z) => z != 'All Zones').toList() : allowedZones).toList();
-    if (zItems.isNotEmpty && !zItems.contains('All Zones')) {
+    if (zItems.length > 1 && !zItems.contains('All Zones')) {
       zItems.insert(0, 'All Zones');
     }
     final zonesList = zItems.isEmpty ? ['All Zones'] : zItems;
@@ -188,7 +188,7 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
       return true;
     }).toList();
 
-    if (wItems.isNotEmpty && !wItems.contains('All Wards')) {
+    if (wItems.length > 1 && !wItems.contains('All Wards')) {
       wItems.insert(0, 'All Wards');
     }
     final wardsList = wItems.isEmpty ? ['All Wards'] : wItems;
