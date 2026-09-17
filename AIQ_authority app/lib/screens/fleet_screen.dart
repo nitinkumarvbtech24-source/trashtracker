@@ -454,6 +454,7 @@ class _FleetScreenState extends State<FleetScreen> {
           )
         ],
       ),
+      ),
     );
   }
 
