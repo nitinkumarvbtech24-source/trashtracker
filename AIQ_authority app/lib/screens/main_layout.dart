@@ -11,6 +11,7 @@ import 'roles_access_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/role_service.dart';
 import '../../main.dart' as app_main;
+import 'comnd_screen.dart';
 
 class MainLayout extends StatefulWidget {
   const MainLayout({super.key});
@@ -63,10 +64,11 @@ class _MainLayoutState extends State<MainLayout> {
     const RolesAccessScreen(), // 0
     const DashboardScreen(), // 1
     const FleetScreen(), // 2
-    const CleanlinessScreen(), // 3
-    const HealthScreen(), // 4
-    const Scaffold(body: Center(child: Text('Reports Screen'))), // 5
-    const SettingsScreen(), // 6
+    const ComndScreen(), // 3
+    const CleanlinessScreen(), // 4
+    const HealthScreen(), // 5
+    const Scaffold(body: Center(child: Text('Reports Screen'))), // 6
+    const SettingsScreen(), // 7
   ];
 
   @override
@@ -156,10 +158,11 @@ class _MainLayoutState extends State<MainLayout> {
       case 0: return 'Roles & Access';
       case 1: return 'Master Dashboard';
       case 2: return 'Fleets & Route Optimization';
-      case 3: return 'Street Cleanliness AI';
-      case 4: return 'Road Health Monitor AI';
-      case 5: return 'Reports';
-      case 6: return 'Settings';
+      case 3: return 'COM&D';
+      case 4: return 'Street Cleanliness AI';
+      case 5: return 'Road Health Monitor AI';
+      case 6: return 'Reports';
+      case 7: return 'Settings';
       default: return 'Street AIQ';
     }
   }
@@ -242,13 +245,15 @@ class _MainLayoutState extends State<MainLayout> {
                     const SizedBox(height: 4),
                     _buildNavItem(2, 'Fleets & Routes', LucideIcons.truck),
                     const SizedBox(height: 4),
-                    _buildNavItem(3, 'Street Cleanliness AI', LucideIcons.sparkles),
+                    _buildNavItem(3, 'COM&D', LucideIcons.messageSquare),
                     const SizedBox(height: 4),
-                    _buildNavItem(4, 'Road Health Monitor AI', LucideIcons.car),
+                    _buildNavItem(4, 'Street Cleanliness AI', LucideIcons.sparkles),
                     const SizedBox(height: 4),
-                    _buildNavItem(5, 'Reports', LucideIcons.fileText),
+                    _buildNavItem(5, 'Road Health Monitor AI', LucideIcons.car),
                     const SizedBox(height: 4),
-                    _buildNavItem(6, 'Settings', LucideIcons.settings),
+                    _buildNavItem(6, 'Reports', LucideIcons.fileText),
+                    const SizedBox(height: 4),
+                    _buildNavItem(7, 'Settings', LucideIcons.settings),
                   ],
                 ),
               ),

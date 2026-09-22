@@ -6,6 +6,7 @@ class RoleService {
   static final List<String> modules = [
     'Master Dashboard',
     'Fleets & Routes',
+    'COM&D',
     'Street Cleanliness AI',
     'Road Health Monitor AI',
     'Reports',
@@ -14,7 +15,7 @@ class RoleService {
   ];
 
   static List<Map<String, dynamic>>? globalRoles;
-  static final ValueNotifier<bool> rolesInitialized = ValueNotifier(false);
+  static final ValueNotifier<int> rolesUpdated = ValueNotifier(0);
   static final ValueNotifier<Map<String, dynamic>?> currentUserPermissions = ValueNotifier(null);
 
   static Future<void> initRoles(List<String> allZones, List<String> allWards) async {
@@ -27,7 +28,7 @@ class RoleService {
         }
       } else {
         globalRoles = snapshot.docs.map((doc) => _deserializeRole(doc.data(), doc.id)).toList();
-        rolesInitialized.value = true;
+        rolesUpdated.value++;
         _updateCurrentUserPermissions();
       }
     });

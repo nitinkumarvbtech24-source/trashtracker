@@ -383,6 +383,60 @@ class CameraService extends ChangeNotifier {
   bool get isInitialized => _controller != null && _controller!.value.isInitialized;
   String? errorMessage;
 
+  Future<void> _fetchWardsAndZones() async {
+    try {
+      final wardsSnapshot = await FirebaseFirestore.instance.collection('wards').get();
+      _cachedWards = wardsSnapshot.docs.map((doc) {
+        var data = doc.data();
+        data['id'] = doc.id;
+        return data;
+      }).toList();
+      
+      final zonesSnapshot = await FirebaseFirestore.instance.collection('zones').get();
+      _cachedZones = zonesSnapshot.docs.map((doc) {
+        var data = doc.data();
+        data['id'] = doc.id;
+        return data;
+      }).toList();
+    } catch (e) {
+      debugPrint("Error fetching wards and zones: $e");
+    }
+  }
+
+  bool _isPointInPolygon(double lat, double lng, dynamic boundary) {
+    if (boundary == null || boundary is! List || boundary.length < 3) return false;
+    bool isInside = false;
+    for (int i = 0, j = boundary.length - 1; i < boundary.length; j = i++) {
+      double? lat1, lng1, lat2, lng2;
+      
+      var node1 = boundary[i];
+      if (node1 is GeoPoint) {
+        lat1 = node1.latitude;
+        lng1 = node1.longitude;
+      } else if (node1 is Map) {
+        lat1 = (node1['lat'] ?? node1['latitude'])?.toDouble();
+        lng1 = (node1['lng'] ?? node1['longitude'])?.toDouble();
+      }
+      
+      var node2 = boundary[j];
+      if (node2 is GeoPoint) {
+        lat2 = node2.latitude;
+        lng2 = node2.longitude;
+      } else if (node2 is Map) {
+        lat2 = (node2['lat'] ?? node2['latitude'])?.toDouble();
+        lng2 = (node2['lng'] ?? node2['longitude'])?.toDouble();
+      }
+      
+      if (lat1 == null || lng1 == null || lat2 == null || lng2 == null) continue;
+
+      if (((lng1 > lng) != (lng2 > lng)) &&
+          (lat < (lat2 - lat1) * (lng - lng1) / (lng2 - lng1) + lat1)) {
+        isInside = !isInside;
+      }
+    }
+    return isInside;
+  }
+
   Future<void> initialize() async {
     try {
       final prefs = await SharedPreferences.getInstance();
