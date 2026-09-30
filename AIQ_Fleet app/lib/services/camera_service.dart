@@ -339,7 +339,7 @@ class CameraService extends ChangeNotifier {
           }
 
           final response = await http.post(
-            Uri.parse('$GARBAGE_AI_URL/upload_training'),
+            Uri.parse('$activeGarbageAiUrl/upload_training'),
             headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
             body: json.encode({
               'image': 'data:image/jpeg;base64,$base64Image',
@@ -355,7 +355,7 @@ class CameraService extends ChangeNotifier {
             await FirebaseFirestore.instance.collection('training_data').add({
               'folder_name': folderName,
               'date': dateStr,
-              'image_url': '$GARBAGE_AI_URL$serverImageUrl',
+              'image_url': '$activeGarbageAiUrl$serverImageUrl',
               'timestamp': FieldValue.serverTimestamp(),
               'lat': metadata['lat'] ?? 0.0,
               'lng': metadata['lng'] ?? 0.0,
@@ -495,7 +495,7 @@ class CameraService extends ChangeNotifier {
 
   Future<void> _checkHealth() async {
     try {
-      final resG = await http.get(Uri.parse('$GARBAGE_AI_URL/api/snapshots'), headers: {'ngrok-skip-browser-warning': 'true'}).timeout(const Duration(seconds: 3));
+      final resG = await http.get(Uri.parse('$activeGarbageAiUrl/api/snapshots'), headers: {'ngrok-skip-browser-warning': 'true'}).timeout(const Duration(seconds: 3));
       final tunnelUp = true;
       final backendUp = resG.statusCode == 200;
       if (_isGarbageTunnelConnected != tunnelUp || _isGarbageBackendConnected != backendUp) {
@@ -613,7 +613,7 @@ class CameraService extends ChangeNotifier {
       // 1. Send to Garbage AI
       try {
         final garbageResponse = await http.post(
-          Uri.parse('$GARBAGE_AI_URL/process_frame'),
+          Uri.parse('$activeGarbageAiUrl/process_frame'),
           headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
           body: json.encode({
             'image': 'data:image/jpeg;base64,$base64Image',
@@ -671,7 +671,7 @@ class CameraService extends ChangeNotifier {
                   'lng': lng,
                   'road_status': roadStatus,
                   'confidence': confidence,
-                  'image_url': '$GARBAGE_AI_URL$imageUrl',
+                  'image_url': '$activeGarbageAiUrl$imageUrl',
                   'timestamp': FieldValue.serverTimestamp(),
                   'status': 'Flagged',
                   'vehicle_number': vehicleNumber,

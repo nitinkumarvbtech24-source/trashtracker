@@ -123,7 +123,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
   }
 
   void _showSettingsDialog(BuildContext context) {
-    final urlController = TextEditingController(text: GARBAGE_AI_URL);
+    final urlController = TextEditingController(text: activeGarbageAiUrl);
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(

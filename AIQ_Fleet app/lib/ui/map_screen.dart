@@ -375,7 +375,9 @@ class _MapScreenState extends State<MapScreen> {
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF1E293B),
         title: Text(
-          spot['road_status'] ?? 'Dirty Spot',
+          (spot['road_status'] == 'Very Dirty Road' || spot['road_status'] == 'Slightly Dirty Road') 
+              ? 'Trash Detected' 
+              : spot['road_status'] ?? 'Dirty Spot',
           style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
         ),
         content: Column(
@@ -389,13 +391,13 @@ class _MapScreenState extends State<MapScreen> {
                     try {
                       final uri = Uri.parse(displayUrl);
                       if (uri.host.contains('ngrok-free.dev')) {
-                        displayUrl = '$GARBAGE_AI_URL${uri.path}';
+                        displayUrl = '$activeGarbageAiUrl${uri.path}';
                       }
                     } catch (_) {}
                   } else if (displayUrl.startsWith('/')) {
-                    displayUrl = '$GARBAGE_AI_URL$displayUrl';
+                    displayUrl = '$activeGarbageAiUrl$displayUrl';
                   } else {
-                    displayUrl = '$GARBAGE_AI_URL/$displayUrl';
+                    displayUrl = '$activeGarbageAiUrl/$displayUrl';
                   }
                   
                   return ClipRRect(

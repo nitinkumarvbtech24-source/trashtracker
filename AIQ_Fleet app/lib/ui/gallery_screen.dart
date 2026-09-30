@@ -69,13 +69,13 @@ class GalleryScreen extends StatelessWidget {
                 try {
                   final uri = Uri.parse(displayUrl);
                   if (uri.host.contains('ngrok-free.dev')) {
-                    displayUrl = '$GARBAGE_AI_URL${uri.path}';
+                    displayUrl = '$activeGarbageAiUrl${uri.path}';
                   }
                 } catch (_) {}
               } else if (displayUrl.startsWith('/')) {
-                displayUrl = '$GARBAGE_AI_URL$displayUrl';
+                displayUrl = '$activeGarbageAiUrl$displayUrl';
               } else if (displayUrl.isNotEmpty) {
-                displayUrl = '$GARBAGE_AI_URL/$displayUrl';
+                displayUrl = '$activeGarbageAiUrl/$displayUrl';
               }
 
               final isVeryDirty = roadStatus == 'Very Dirty Road';
@@ -109,7 +109,7 @@ class GalleryScreen extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            roadStatus,
+                            (roadStatus == 'Very Dirty Road' || roadStatus == 'Slightly Dirty Road') ? 'Trash Detected' : roadStatus,
                             style: GoogleFonts.outfit(color: color, fontWeight: FontWeight.bold, fontSize: 14),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,

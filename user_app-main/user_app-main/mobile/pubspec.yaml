@@ -57,6 +57,10 @@ dependencies:
   # HTTP (for Razorpay webhook)
   http: ^1.2.2
 
+  # Firebase
+  firebase_core: ^2.24.2
+  cloud_firestore: ^4.13.6
+
   # Advanced UI Masterpiece Packages
   flutter_slidable: ^3.1.1
   lottie: ^3.1.2

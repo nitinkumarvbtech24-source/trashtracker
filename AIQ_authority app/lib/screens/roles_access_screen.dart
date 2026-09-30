@@ -115,6 +115,7 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
   String? _editingRegionId;
   String? _editingRegionName;
   final MapController _mapController = MapController();
+  final MapController _dashboardMapController = MapController();
 
   final TextEditingController _vehicleNumberController = TextEditingController();
   final TextEditingController _vehicleDriverNameController = TextEditingController();
@@ -141,6 +142,7 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
     _wardsSub?.cancel();
     _zonesSub?.cancel();
     _mapController.dispose();
+    _dashboardMapController.dispose();
     _userNameController.dispose();
     _userEmailController.dispose();
     _userPhoneController.dispose();
@@ -1724,8 +1726,8 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                 const SizedBox(width: 12),
                 ElevatedButton(
                   onPressed: () async {
-                    String finalZone = hasAllAccess ? 'All Zones' : (_selectedFormZone ?? '');
-                    String finalWard = hasAllAccess ? 'All Wards' : (_selectedFormWard ?? '');
+                    String finalZone = _selectedFormZone ?? (hasAllAccess ? 'All Zones' : '');
+                    String finalWard = _selectedFormWard ?? (hasAllAccess ? 'All Wards' : '');
                     
                     if (_userNameController.text.isEmpty || _selectedFormRole == null || _userEmailController.text.isEmpty || finalZone.isEmpty || finalWard.isEmpty) return;
                     
@@ -2256,20 +2258,25 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                     }
 
                     final Map<String, dynamic> vehicleData = {
-                      'vehicleNumber': _vehicleNumberController.text,
-                      'driverName': _vehicleDriverNameController.text,
-                      'phoneNumber': _vehiclePhoneController.text,
-                      'password': _vehiclePasswordController.text,
+                      'vehicleNumber': _vehicleNumberController.text.trim(),
+                      'driverName': _vehicleDriverNameController.text.trim(),
+                      'phoneNumber': _vehiclePhoneController.text.trim(),
+                      'password': _vehiclePasswordController.text.trim(),
                       'zone': finalZone,
                       'assignedWard': finalWard,
                     };
 
                     if (isEditing) {
                       final docId = _vehicles[_editingResourceIndex!]['id'];
-                      await FirebaseFirestore.instance.collection('vehicles').doc(docId).update(vehicleData);
+                      if (docId != vehicleData['vehicleNumber']) {
+                        await FirebaseFirestore.instance.collection('vehicles').doc(vehicleData['vehicleNumber']).set(vehicleData);
+                        await FirebaseFirestore.instance.collection('vehicles').doc(docId).delete();
+                      } else {
+                        await FirebaseFirestore.instance.collection('vehicles').doc(docId).update(vehicleData);
+                      }
                     } else {
                       vehicleData['isActive'] = true;
-                      await FirebaseFirestore.instance.collection('vehicles').add(vehicleData);
+                      await FirebaseFirestore.instance.collection('vehicles').doc(vehicleData['vehicleNumber']).set(vehicleData);
                     }
 
                     setState(() {
@@ -2750,6 +2757,8 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                     ),
                   ),
                 ),
+                // Zoom controls
+                _buildMapZoomControls(_mapController),
                 
                 // Bottom Analytics Panel
                 if (_selectedWardForMap != null && _currentMapMode == ResourceMapMode.view)
@@ -2757,7 +2766,7 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                     bottom: 0,
                     left: 0,
                     right: 0,
-                    child: _buildWardAnalyticsPanel(),
+                    child: _buildWardAnalyticsPanel(_selectedWardForMap!, () => setState(() => _selectedWardForMap = null)),
                   ),
               ],
             ),
@@ -2824,23 +2833,74 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
     );
   }
 
-  Widget _buildWardAnalyticsPanel() {
+  Widget _buildMapZoomControls(MapController controller) {
+    return Positioned(
+      bottom: 300,
+      right: 16,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FloatingActionButton.small(
+            heroTag: null,
+            backgroundColor: Colors.white,
+            onPressed: () {
+              final zoom = controller.camera.zoom + 1;
+              controller.move(controller.camera.center, zoom);
+            },
+            child: const Icon(LucideIcons.plus, color: Colors.black87),
+          ),
+          const SizedBox(height: 8),
+          FloatingActionButton.small(
+            heroTag: null,
+            backgroundColor: Colors.white,
+            onPressed: () {
+              final zoom = controller.camera.zoom - 1;
+              controller.move(controller.camera.center, zoom);
+            },
+            child: const Icon(LucideIcons.minus, color: Colors.black87),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWardAnalyticsPanel(Ward ward, VoidCallback onClose) {
     final assignedVehicles = _vehicles.where((v) {
-      final wardName = v['ward']?.toString().toLowerCase() ?? '';
-      return wardName.contains(_selectedWardForMap!.name.toLowerCase()) || 
-             _selectedWardForMap!.name.toLowerCase().contains(wardName);
+      final wardName = (v['assignedWard']?.toString() ?? v['ward']?.toString() ?? '').toLowerCase();
+      if (wardName.isEmpty) return false;
+      if (wardName == 'all wards') return true;
+      return wardName.contains(ward.name.toLowerCase()) || 
+             ward.name.toLowerCase().contains(wardName);
     }).toList();
     
-    final authorities = _users.where((u) {
+    final wardOfficers = _users.where((u) {
        final r = u['role']?.toString().toLowerCase() ?? '';
-       final w = u['ward']?.toString().toLowerCase() ?? '';
-       return r.contains('ward') && (w.contains(_selectedWardForMap!.name.toLowerCase()) || _selectedWardForMap!.name.toLowerCase().contains(w));
+       final w = (u['ward']?.toString() ?? '').toLowerCase();
+       return r.contains('ward') && (w == 'all wards' || w.contains(ward.name.toLowerCase()) || ward.name.toLowerCase().contains(w));
     }).toList();
     
-    final authorityName = authorities.isNotEmpty ? authorities.first['name'] : 'Unassigned';
+    Zone? parentZone;
+    for (var z in _zoneModels) {
+      if (_isWardInZone(ward, z)) {
+        parentZone = z;
+        break;
+      }
+    }
+
+    final zoneOfficers = _users.where((u) {
+       final r = u['role']?.toString().toLowerCase() ?? '';
+       if (!r.contains('zone')) return false;
+       final z = (u['zone']?.toString() ?? '').toLowerCase();
+       if (z == 'all zones') return true;
+       if (parentZone != null && (z.contains(parentZone.name.toLowerCase()) || parentZone.name.toLowerCase().contains(z))) return true;
+       return false;
+    }).toList();
+    
+    final wardOfficerName = wardOfficers.isNotEmpty ? wardOfficers.first['name'] : 'Unassigned';
+    final zoneOfficerName = zoneOfficers.isNotEmpty ? zoneOfficers.first['name'] : 'Unassigned';
 
     return Container(
-      height: 220,
+      height: 280,
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: const BorderRadius.only(topLeft: Radius.circular(16), topRight: Radius.circular(16)),
@@ -2860,21 +2920,23 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text('${_selectedWardForMap!.name} Analytics', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87)),
+                      Text('${ward.name} Analytics', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87)),
                       IconButton(
                         icon: const Icon(LucideIcons.x, size: 20, color: Colors.grey),
-                        onPressed: () => setState(() => _selectedWardForMap = null),
+                        onPressed: onClose,
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),
                       ),
                     ],
                   ),
                   const SizedBox(height: 16),
-                  Row(
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
                     children: [
                       _buildAnalyticStat(LucideIcons.truck, 'Vehicles', '${assignedVehicles.length}'),
-                      const SizedBox(width: 24),
-                      _buildAnalyticStat(LucideIcons.user, 'Authority', authorityName.toString()),
+                      _buildAnalyticStat(LucideIcons.user, 'Ward Officer', wardOfficerName.toString()),
+                      _buildAnalyticStat(LucideIcons.shieldCheck, 'Zone Officer', zoneOfficerName.toString()),
                     ],
                   ),
                   const SizedBox(height: 16),
@@ -3038,6 +3100,7 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                     child: Stack(
                       children: [
                         FlutterMap(
+                          mapController: _dashboardMapController,
                           options: MapOptions(
                             initialCenter: const LatLng(12.9716, 77.5946),
                             initialZoom: 12.0,
@@ -3171,6 +3234,10 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                             ),
                           ],
                         ),
+                        
+                        // Zoom controls
+                        _buildMapZoomControls(_dashboardMapController),
+
                         // Info toggle button
                         Positioned(
                           top: 16,
@@ -3185,6 +3252,15 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                             ),
                           ),
                         ),
+
+                        // Bottom Analytics Panel
+                        if (_dashboardSelectedWard != null)
+                          Positioned(
+                            bottom: 0,
+                            left: 0,
+                            right: 0,
+                            child: _buildWardAnalyticsPanel(_dashboardSelectedWard!, () => setState(() => _dashboardSelectedWard = null)),
+                          ),
                       ],
                     ),
                   ),

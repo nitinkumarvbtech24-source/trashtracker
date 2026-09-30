@@ -34,7 +34,11 @@ void main() async {
   if (savedUrlV3 != null && savedUrlV3.isNotEmpty) {
     GARBAGE_AI_V3_URL = savedUrlV3;
   }
-  MODEL_VERSION = prefs.getInt('model_version') ?? (prefs.getBool('use_v2_model') == true ? 2 : 1);
+  final savedUrlV4 = prefs.getString('garbage_ai_v4_url');
+  if (savedUrlV4 != null && savedUrlV4.isNotEmpty) {
+    GARBAGE_AI_V4_URL = savedUrlV4;
+  }
+  MODEL_VERSION = 4; // Forced to V4
 
 
   runApp(const StreetAIQApp());

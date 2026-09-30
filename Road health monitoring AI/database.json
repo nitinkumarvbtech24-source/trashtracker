@@ -2,6 +2,72 @@
     "recent_potholes": [],
     "recent_snapshots": [
         {
+            "vehicle_number": "ka 01 aa 0001",
+            "ward": "Ward 03",
+            "lat": 13.056999162635236,
+            "lng": 77.50289688371889,
+            "display_class": "Bad Road",
+            "road_status": "Bad Road",
+            "confidence": 1.0,
+            "image_url": "/detections/event_1790733476.jpg",
+            "timestamp": "event_1790733476"
+        },
+        {
+            "vehicle_number": "ka 01 aa 0001",
+            "ward": "ward 01",
+            "lat": 13.056772568032931,
+            "lng": 77.50360878055403,
+            "display_class": "Bad Road",
+            "road_status": "Bad Road",
+            "confidence": 1.0,
+            "image_url": "/detections/event_1790733297.jpg",
+            "timestamp": "event_1790733297"
+        },
+        {
+            "vehicle_number": "ka 01 aa 0002",
+            "ward": "Ward 10",
+            "lat": 13.0568802,
+            "lng": 77.5028327,
+            "display_class": "Bad Road",
+            "road_status": "Bad Road",
+            "confidence": 1.0,
+            "image_url": "/detections/event_1790733284.jpg",
+            "timestamp": "event_1790733284"
+        },
+        {
+            "vehicle_number": "ka 01 aa 0002",
+            "ward": "Ward 10",
+            "lat": 13.0568802,
+            "lng": 77.5028327,
+            "display_class": "Pothole Detected",
+            "road_status": "Pothole Detected",
+            "confidence": 1.0,
+            "image_url": "/detections/event_1790733276.jpg",
+            "timestamp": "event_1790733276"
+        },
+        {
+            "vehicle_number": "ka 01 aa 0002",
+            "ward": "Ward 10",
+            "lat": 13.056986882672536,
+            "lng": 77.50294048023237,
+            "display_class": "Bad Road",
+            "road_status": "Bad Road",
+            "confidence": 1.0,
+            "image_url": "/detections/event_1790645926.jpg",
+            "timestamp": "event_1790645926"
+        },
+        {
+            "vehicle_number": "ka 01 aa 0002",
+            "ward": "Ward 10",
+            "lat": 13.056986769509583,
+            "lng": 77.5029365776085,
+            "display_class": "Bad Road",
+            "road_status": "Bad Road",
+            "confidence": 1.0,
+            "image_url": "/detections/event_1790644134.jpg",
+            "timestamp": "event_1790644134"
+        },
+        {
             "vehicle_number": "ka 01 aa 0002",
             "ward": "Unassigned",
             "lat": 12.922648765450754,

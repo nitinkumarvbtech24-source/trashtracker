@@ -72,7 +72,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           final base64Image = base64Encode(bytes);
 
           final response = await http.post(
-            Uri.parse('$GARBAGE_AI_URL/upload_training'),
+            Uri.parse('$activeGarbageAiUrl/upload_training'),
             headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
             body: json.encode({
               'image': 'data:image/jpeg;base64,$base64Image',
@@ -88,7 +88,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             await FirebaseFirestore.instance.collection('training_data').add({
               'folder_name': folderName,
               'date': dateStr,
-              'image_url': '$GARBAGE_AI_URL$serverImageUrl',
+              'image_url': '$activeGarbageAiUrl$serverImageUrl',
               'timestamp': FieldValue.serverTimestamp(),
               'lat': metadata['lat'] ?? 0.0,
               'lng': metadata['lng'] ?? 0.0,
@@ -129,17 +129,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _loadSavedLinks() async {
     final prefs = await SharedPreferences.getInstance();
     final String? linksJson = prefs.getString('saved_tunnels');
+    final String? v2LinksJson = prefs.getString('saved_tunnels_v2');
+    final String? v3LinksJson = prefs.getString('saved_tunnels_v3');
+    final String? v4LinksJson = prefs.getString('saved_tunnels_v4');
     
     Map<String, String> links = {};
-    if (linksJson != null && linksJson.isNotEmpty) {
-      links = Map<String, String>.from(json.decode(linksJson));
+    String linksString = (MODEL_VERSION == 4 ? v4LinksJson : (MODEL_VERSION == 3 ? v3LinksJson : (MODEL_VERSION == 2 ? v2LinksJson : linksJson))) ?? '';
+    
+    if (linksString.isNotEmpty) {
+      links = Map<String, String>.from(json.decode(linksString));
     }
+    
+    String activeUrl = activeGarbageAiUrl;
     
     if (links.isEmpty) {
-      links['Default Ngrok'] = GARBAGE_AI_URL;
+      links['Default Ngrok'] = activeUrl;
     }
     
-    String activeUrl = GARBAGE_AI_URL;
     String? activeKey;
     
     links.forEach((key, value) {
@@ -162,9 +168,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _saveLinksAndSet(String name, String url) async {
     final prefs = await SharedPreferences.getInstance();
     _savedLinks[name] = url;
-    await prefs.setString('saved_tunnels', json.encode(_savedLinks));
-    await prefs.setString('garbage_ai_url', url);
-    GARBAGE_AI_URL = url;
+    if (MODEL_VERSION == 4) {
+        await prefs.setString('saved_tunnels_v4', json.encode(_savedLinks));
+        await prefs.setString('garbage_ai_v4_url', url);
+        GARBAGE_AI_V4_URL = url;
+    } else if (MODEL_VERSION == 3) {
+        await prefs.setString('saved_tunnels_v3', json.encode(_savedLinks));
+        await prefs.setString('garbage_ai_v3_url', url);
+        GARBAGE_AI_V3_URL = url;
+    } else if (MODEL_VERSION == 2) {
+        await prefs.setString('saved_tunnels_v2', json.encode(_savedLinks));
+        await prefs.setString('garbage_ai_v2_url', url);
+        GARBAGE_AI_V2_URL = url;
+    } else {
+        await prefs.setString('saved_tunnels', json.encode(_savedLinks));
+        await prefs.setString('garbage_ai_url', url);
+        GARBAGE_AI_URL = url;
+    }
     
     setState(() {
       _selectedLinkKey = name;
@@ -226,6 +246,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
   }
 
+  Future<void> _setModelVersion(int version) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('model_version', version);
+    MODEL_VERSION = version;
+    await _loadSavedLinks();
+  }
+
 
 
 
@@ -283,6 +310,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('Model Version', style: GoogleFonts.inter(fontSize: 14, color: Colors.white)),
+                        Text('V4 (Port 5001)', style: GoogleFonts.inter(fontSize: 14, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    const Divider(color: Colors.white10),
+                    const SizedBox(height: 16),
                     Text('Active Tunnel Server', style: GoogleFonts.inter(fontSize: 12, color: Colors.white54)),
                     const SizedBox(height: 8),
                     if (_savedLinks.isNotEmpty)

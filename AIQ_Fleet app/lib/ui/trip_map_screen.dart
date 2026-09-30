@@ -126,13 +126,13 @@ class _TripMapScreenState extends State<TripMapScreen> {
                     try {
                       final uri = Uri.parse(displayUrl);
                       if (uri.host.contains('ngrok-free.dev')) {
-                        displayUrl = '$GARBAGE_AI_URL${uri.path}';
+                        displayUrl = '$activeGarbageAiUrl${uri.path}';
                       }
                     } catch (_) {}
                   } else if (displayUrl.startsWith('/')) {
-                    displayUrl = '$GARBAGE_AI_URL$displayUrl';
+                    displayUrl = '$activeGarbageAiUrl$displayUrl';
                   } else {
-                    displayUrl = '$GARBAGE_AI_URL/$displayUrl';
+                    displayUrl = '$activeGarbageAiUrl/$displayUrl';
                   }
                   
                   return ClipRRect(

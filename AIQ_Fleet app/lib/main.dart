@@ -30,9 +30,22 @@ void main() async {
   
   final prefs = await SharedPreferences.getInstance();
   final savedUrl = prefs.getString('garbage_ai_url');
-  // if (savedUrl != null && savedUrl.isNotEmpty) {
-  //   GARBAGE_AI_URL = savedUrl;
-  // }
+  if (savedUrl != null && savedUrl.isNotEmpty) {
+    GARBAGE_AI_URL = savedUrl;
+  }
+  final savedUrlV2 = prefs.getString('garbage_ai_v2_url');
+  if (savedUrlV2 != null && savedUrlV2.isNotEmpty) {
+    GARBAGE_AI_V2_URL = savedUrlV2;
+  }
+  final savedUrlV3 = prefs.getString('garbage_ai_v3_url');
+  if (savedUrlV3 != null && savedUrlV3.isNotEmpty) {
+    GARBAGE_AI_V3_URL = savedUrlV3;
+  }
+  final savedUrlV4 = prefs.getString('garbage_ai_v4_url');
+  if (savedUrlV4 != null && savedUrlV4.isNotEmpty) {
+    GARBAGE_AI_V4_URL = savedUrlV4;
+  }
+  MODEL_VERSION = 4; // Forced to V4
   
   runApp(
     MultiProvider(

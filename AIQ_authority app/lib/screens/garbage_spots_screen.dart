@@ -7,6 +7,8 @@ import 'dart:math' as math;
 import 'dart:convert';
 import 'dart:async';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import '../models/garbage_flag.dart';
 import '../widgets/ngrok_image.dart';
 import '../services/role_service.dart';
@@ -22,6 +24,9 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
   bool _isSidebarOpen = true;
   List<GarbageFlag> _garbageFlags = [];
   bool _isAutoMode = true;
+  int _viewMode = 0; // 0 for list, 1 for map
+  GarbageFlag? _selectedFlag;
+  final MapController _mapController = MapController();
 
   List<String> _allZones = ['All Zones'];
   List<String> _allWards = ['All Wards'];
@@ -43,6 +48,7 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
   void dispose() {
     _zonesSub?.cancel();
     _wardsSub?.cancel();
+    _mapController.dispose();
     super.dispose();
   }
 
@@ -97,6 +103,19 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
               ],
             ),
           ),
+        ],
+      ),
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _viewMode,
+        onTap: (idx) => setState(() {
+          _viewMode = idx;
+          if (idx == 0) _selectedFlag = null; // Clear selection when switching to list
+        }),
+        selectedItemColor: const Color(0xFF0F5132),
+        unselectedItemColor: const Color(0xFF94A3B8),
+        items: const [
+          BottomNavigationBarItem(icon: Icon(LucideIcons.list), label: 'List View'),
+          BottomNavigationBarItem(icon: Icon(LucideIcons.map), label: 'Map View'),
         ],
       ),
     );
@@ -326,34 +345,207 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
           ),
           const SizedBox(height: 24),
 
-          // Table
-          Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFFE2E8F0)),
-            ),
-            child: Column(
-              children: [
-                _buildTableHeader(),
-                const Divider(height: 1, color: Color(0xFFE2E8F0)),
-                if (filteredFlags.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.all(32.0),
-                    child: Center(child: Text('No garbage spots found with current filters.', style: TextStyle(color: Color(0xFF64748B)))),
-                  )
-                else
-                  ListView.separated(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: math.min(filteredFlags.length, 10), // Limit to 10 for performance
-                    separatorBuilder: (context, index) => const Divider(height: 1, color: Color(0xFFE2E8F0)),
-                    itemBuilder: (context, index) {
-                      return _buildTableRow(index, filteredFlags[index]);
-                    },
+          // Table or Map
+          _viewMode == 0
+              ? Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFFE2E8F0)),
                   ),
-                const Divider(height: 1, color: Color(0xFFE2E8F0)),
-                _buildPagination(),
+                  child: Column(
+                    children: [
+                      _buildTableHeader(),
+                      const Divider(height: 1, color: Color(0xFFE2E8F0)),
+                      if (filteredFlags.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.all(32.0),
+                          child: Center(child: Text('No garbage spots found with current filters.', style: TextStyle(color: Color(0xFF64748B)))),
+                        )
+                      else
+                        ListView.separated(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          itemCount: math.min(filteredFlags.length, 10), // Limit to 10 for performance
+                          separatorBuilder: (context, index) => const Divider(height: 1, color: Color(0xFFE2E8F0)),
+                          itemBuilder: (context, index) {
+                            return _buildTableRow(index, filteredFlags[index]);
+                          },
+                        ),
+                      const Divider(height: 1, color: Color(0xFFE2E8F0)),
+                      _buildPagination(),
+                    ],
+                  ),
+                )
+              : _buildMapView(filteredFlags),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMapView(List<GarbageFlag> flags) {
+    return Container(
+      height: 600,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        children: [
+          FlutterMap(
+            mapController: _mapController,
+            options: MapOptions(
+              initialCenter: const LatLng(12.9716, 77.5946),
+              initialZoom: 12.0,
+              onTap: (_, __) => setState(() => _selectedFlag = null),
+            ),
+            children: [
+              TileLayer(
+                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                userAgentPackageName: 'com.example.app',
+              ),
+              Builder(
+                builder: (context) {
+                  final camera = MapCamera.of(context);
+                  final showPins = camera.zoom >= 14.0;
+                  
+                  if (showPins) {
+                    return MarkerLayer(
+                      markers: flags.map((flag) {
+                        return Marker(
+                          point: LatLng(flag.lat, flag.lng),
+                          width: 40,
+                          height: 40,
+                          child: GestureDetector(
+                            onTap: () {
+                              setState(() {
+                                _selectedFlag = flag;
+                              });
+                              _mapController.move(LatLng(flag.lat, flag.lng), 15.0);
+                            },
+                            child: const Icon(LucideIcons.mapPin, color: Colors.red, size: 32),
+                          ),
+                        );
+                      }).toList(),
+                    );
+                  } else {
+                    // Sort flags by time ascending just for the line so it draws a continuous path sequentially
+                    final sortedFlags = List<GarbageFlag>.from(flags)..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+                    return PolylineLayer(
+                      polylines: [
+                        Polyline(
+                          points: sortedFlags.map((f) => LatLng(f.lat, f.lng)).toList(),
+                          color: Colors.red.withOpacity(0.8),
+                          strokeWidth: 4.0,
+                        ),
+                      ],
+                    );
+                  }
+                },
+              ),
+            ],
+          ),
+          Positioned(
+            bottom: 24,
+            right: 16,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                FloatingActionButton.small(
+                  heroTag: null,
+                  backgroundColor: Colors.white,
+                  onPressed: () {
+                    final zoom = _mapController.camera.zoom + 1;
+                    _mapController.move(_mapController.camera.center, zoom);
+                  },
+                  child: const Icon(LucideIcons.plus, color: Colors.black87),
+                ),
+                const SizedBox(height: 8),
+                FloatingActionButton.small(
+                  heroTag: null,
+                  backgroundColor: Colors.white,
+                  onPressed: () {
+                    final zoom = _mapController.camera.zoom - 1;
+                    _mapController.move(_mapController.camera.center, zoom);
+                  },
+                  child: const Icon(LucideIcons.minus, color: Colors.black87),
+                ),
+              ],
+            ),
+          ),
+          if (_selectedFlag != null)
+            Positioned(
+              bottom: 24,
+              left: 24,
+              right: 80,
+              child: _buildFlagPopup(_selectedFlag!),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFlagPopup(GarbageFlag flag) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, 4)),
+        ],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: SizedBox(
+              width: 100,
+              height: 100,
+              child: NgrokImage(
+                url: flag.imageUrl,
+                fit: BoxFit.cover,
+                width: 100,
+                height: 100,
+              ),
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Spot ID: ${flag.id.substring(0, math.min(6, flag.id.length)).toUpperCase()}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                    IconButton(
+                      icon: const Icon(LucideIcons.x, size: 20, color: Colors.grey),
+                      onPressed: () => setState(() => _selectedFlag = null),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text('Location: ${flag.lat.toStringAsFixed(4)}, ${flag.lng.toStringAsFixed(4)}', style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                Text('Ward: ${flag.ward}', style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                Text('Detected: ${DateFormat('dd MMM yyyy, hh:mm a').format(DateTime.parse(flag.timestamp))}', style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                const SizedBox(height: 12),
+                ElevatedButton.icon(
+                  onPressed: () async {
+                    final url = 'https://www.google.com/maps/search/?api=1&query=${flag.lat},${flag.lng}';
+                    if (await canLaunchUrl(Uri.parse(url))) {
+                      await launchUrl(Uri.parse(url));
+                    }
+                  },
+                  icon: const Icon(LucideIcons.navigation, size: 16, color: Colors.white),
+                  label: const Text('Navigate', style: TextStyle(color: Colors.white)),
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0F5132)),
+                ),
               ],
             ),
           ),

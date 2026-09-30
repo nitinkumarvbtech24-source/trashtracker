@@ -481,10 +481,18 @@ class _CameraScreenState extends State<CameraScreen> {
                               Builder(
                                 builder: (context) {
                                   Map<String, dynamic>? res = _lastResult ?? cameraService.latestResult;
-                                  String garbageStatus = (res?['garbage']?['road_status']?.toString() ?? 'UNKNOWN').replaceAll('_', ' ').toUpperCase();
+                                  String rawGarbage = (res?['garbage']?['road_status']?.toString() ?? 'UNKNOWN');
+                                  String garbageStatus;
+                                  if (rawGarbage == 'Clean Road') {
+                                    garbageStatus = 'NO TRASH DETECTED';
+                                  } else if (rawGarbage == 'Slightly Dirty Road' || rawGarbage == 'Very Dirty Road') {
+                                    garbageStatus = 'TRASH DETECTED';
+                                  } else {
+                                    garbageStatus = rawGarbage.replaceAll('_', ' ').toUpperCase();
+                                  }
                                   String healthStatus = (res?['health']?['road_status']?.toString() ?? 'UNKNOWN').replaceAll('_', ' ').toUpperCase();
                                   String displayStatus = "$garbageStatus / $healthStatus";
-                                  if (garbageStatus == 'NOT A ROAD') displayStatus = "NOT A ROAD";
+                                  if (rawGarbage == 'NOT A ROAD') displayStatus = "NOT A ROAD";
                                   
                                   return Column(
                                     children: [

@@ -5,6 +5,9 @@ import '../../core/theme/app_theme.dart';
 import '../../providers/auth_provider.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_text_field.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:latlong2/latlong.dart';
+import 'map_selection_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -26,6 +29,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   Future<void> _register() async {
     if (!_formKey.currentState!.validate()) return;
+    
+    if (_latCtrl.text.isEmpty || _lngCtrl.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please select your location'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
     if (_passwordCtrl.text != _confirmCtrl.text) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -47,6 +61,30 @@ class _RegisterScreenState extends State<RegisterScreen> {
         password: _passwordCtrl.text,
       );
     } catch (_) {}
+  }
+
+  Future<void> _getCurrentLocation() async {
+    bool serviceEnabled;
+    LocationPermission permission;
+
+    serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Location services are disabled.')));
+      return;
+    }
+
+    permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) return;
+    }
+    if (permission == LocationPermission.deniedForever) return;
+
+    final pos = await Geolocator.getCurrentPosition();
+    setState(() {
+      _latCtrl.text = pos.latitude.toString();
+      _lngCtrl.text = pos.longitude.toString();
+    });
   }
 
   @override
@@ -187,31 +225,72 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     return null;
                   },
                 ),
-                Row(
-                  children: [
-                    Expanded(
-                      child: AppTextField(
-                        label: 'Latitude',
-                        hint: 'e.g. 12.9716',
-                        controller: _latCtrl,
-                        prefixIcon: Icons.location_on_outlined,
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                        validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppColors.primary.withOpacity(0.3)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Home / Default Location', style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+                      const SizedBox(height: 8),
+                      Text(
+                        _latCtrl.text.isEmpty ? 'No location selected' : 'Selected: ${_latCtrl.text}, ${_lngCtrl.text}',
+                        style: TextStyle(color: _latCtrl.text.isEmpty ? Colors.grey : AppColors.primary),
                       ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: AppTextField(
-                        label: 'Longitude',
-                        hint: 'e.g. 77.5946',
-                        controller: _lngCtrl,
-                        prefixIcon: Icons.location_on_outlined,
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                        validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: _getCurrentLocation,
+                              icon: const Icon(Icons.my_location, size: 18),
+                              label: const Text('Use Current'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: AppColors.primary,
+                                side: const BorderSide(color: AppColors.primary),
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: () async {
+                                final LatLng? result = await Navigator.push(
+                                  context,
+                                  MaterialPageRoute(builder: (context) => const MapSelectionScreen()),
+                                );
+                                if (result != null) {
+                                  setState(() {
+                                    _latCtrl.text = result.latitude.toString();
+                                    _lngCtrl.text = result.longitude.toString();
+                                  });
+                                }
+                              },
+                              icon: const Icon(Icons.map, size: 18),
+                              label: const Text('Pick on Map'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppColors.primary,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                    ),
-                  ],
+                      if (_latCtrl.text.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 8.0),
+                          child: Text('Location is required for pickup services', style: TextStyle(color: AppColors.error, fontSize: 12)),
+                        ),
+                    ],
+                  ),
                 ),
+                const SizedBox(height: 16),
                 AppTextField(
                   label: 'Password',
                   hint: 'Min. 8 characters',

@@ -11,6 +11,10 @@ class ApiClient {
   ));
 
   static bool _interceptorSetup = false;
+  
+  static String _mockName = 'Nitin User';
+  static String _mockEmail = 'nitin@example.com';
+  static String _mockPhone = '9876543210';
 
   static Dio get instance {
     if (!_interceptorSetup) {
@@ -28,6 +32,11 @@ class ApiClient {
         await Future.delayed(const Duration(milliseconds: 500)); // Simulate network latency
 
         if (options.path.contains('/auth/login') || options.path.contains('/auth/register')) {
+          if (options.data != null) {
+            if (options.data['name'] != null) _mockName = options.data['name'];
+            if (options.data['email'] != null) _mockEmail = options.data['email'];
+            if (options.data['phone'] != null) _mockPhone = options.data['phone'];
+          }
           return handler.resolve(Response(
             requestOptions: options,
             statusCode: 200,
@@ -36,9 +45,9 @@ class ApiClient {
               'data': {
                 'user': {
                   'id': 'mock-user-id',
-                  'name': 'Demo User',
-                  'email': 'demo@example.com',
-                  'phone': '1234567890',
+                  'name': _mockName,
+                  'email': _mockEmail,
+                  'phone': _mockPhone,
                   'role': 'USER',
                   'createdAt': DateTime.now().toIso8601String(),
                 },
@@ -57,9 +66,9 @@ class ApiClient {
               'status': 'success',
               'data': {
                 'id': 'mock-user-id',
-                'name': 'Demo User',
-                'email': 'demo@example.com',
-                'phone': '1234567890',
+                'name': _mockName,
+                'email': _mockEmail,
+                'phone': _mockPhone,
                 'role': 'USER',
                 'createdAt': DateTime.now().toIso8601String(),
               }

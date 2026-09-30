@@ -3,10 +3,12 @@
 String GARBAGE_AI_URL = "https://grumbling-tattling-schilling.ngrok-free.dev";
 String GARBAGE_AI_V2_URL = "https://pointer-staff-prodigy-v2.ngrok-free.dev";
 String GARBAGE_AI_V3_URL = "https://pointer-staff-prodigy-v3.ngrok-free.dev";
+String GARBAGE_AI_V4_URL = "https://grumbling-tattling-schilling.ngrok-free.dev";
 String HEALTH_AI_URL = "https://pointer-staff-prodigy.ngrok-free.dev"; // Or the ngrok URL for Health AI
-int MODEL_VERSION = 1;
+int MODEL_VERSION = 4;
 
 String get activeGarbageAiUrl {
+  if (MODEL_VERSION == 4) return GARBAGE_AI_V4_URL;
   if (MODEL_VERSION == 3) return GARBAGE_AI_V3_URL;
   if (MODEL_VERSION == 2) return GARBAGE_AI_V2_URL;
   return GARBAGE_AI_URL;
