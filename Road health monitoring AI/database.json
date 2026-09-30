@@ -2,6 +2,61 @@
     "recent_potholes": [],
     "recent_snapshots": [
         {
+            "vehicle_number": "ka 01 aa 0002",
+            "ward": "ward 01",
+            "lat": 13.0568362,
+            "lng": 77.5028014,
+            "display_class": "Bad Road",
+            "road_status": "Bad Road",
+            "confidence": 1.0,
+            "image_url": "/detections/event_1790735101.jpg",
+            "timestamp": "event_1790735101"
+        },
+        {
+            "vehicle_number": "ka 01 aa 0002",
+            "ward": "ward 01",
+            "lat": 13.0568937,
+            "lng": 77.5028421,
+            "display_class": "Bad Road",
+            "road_status": "Bad Road",
+            "confidence": 1.0,
+            "image_url": "/detections/event_1790734835.jpg",
+            "timestamp": "event_1790734835"
+        },
+        {
+            "vehicle_number": "ka 01 aa 0002",
+            "ward": "ward 01",
+            "lat": 13.0568784,
+            "lng": 77.5028563,
+            "display_class": "Bad Road",
+            "road_status": "Bad Road",
+            "confidence": 1.0,
+            "image_url": "/detections/event_1790734079.jpg",
+            "timestamp": "event_1790734079"
+        },
+        {
+            "vehicle_number": "ka 01 aa 0002",
+            "ward": "ward 01",
+            "lat": 13.056859,
+            "lng": 77.5028997,
+            "display_class": "Bad Road",
+            "road_status": "Bad Road",
+            "confidence": 1.0,
+            "image_url": "/detections/event_1790734059.jpg",
+            "timestamp": "event_1790734059"
+        },
+        {
+            "vehicle_number": "ka 01 aa 0002",
+            "ward": "ward 01",
+            "lat": 13.0568753,
+            "lng": 77.5029498,
+            "display_class": "Bad Road",
+            "road_status": "Bad Road",
+            "confidence": 1.0,
+            "image_url": "/detections/event_1790734022.jpg",
+            "timestamp": "event_1790734022"
+        },
+        {
             "vehicle_number": "ka 01 aa 0001",
             "ward": "Ward 03",
             "lat": 13.056999162635236,

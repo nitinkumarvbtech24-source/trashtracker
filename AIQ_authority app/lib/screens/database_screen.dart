@@ -19,7 +19,7 @@ class _DatabaseScreenState extends State<DatabaseScreen> with SingleTickerProvid
   late AnimationController _pulseController;
   Timer? _timer;
   List<dynamic> _snapshots = [];
-  Map<String, dynamic> _stats = {"total": 0, "Clean Road": 0, "Slightly Dirty Road": 0, "Very Dirty Road": 0, "Not a Road": 0};
+  Map<String, dynamic> _stats = {"total": 0, "No Trash Detected": 0, "Trash Detected": 0, "Not a Road": 0};
   String _selectedFolder = 'All';
 
   @override
@@ -44,29 +44,18 @@ class _DatabaseScreenState extends State<DatabaseScreen> with SingleTickerProvid
         final res1 = await http.get(Uri.parse('$activeGarbageAiUrl/api/snapshots'), headers: {'ngrok-skip-browser-warning': 'true'});
         if (res1.statusCode == 200) {
           final data = json.decode(res1.body);
-          allSnaps.addAll(data['snapshots'] ?? []);
+          List<dynamic> rawSnaps = data['snapshots'] ?? [];
+          for (var snap in rawSnaps) {
+            if (snap['display_class'] == 'Clean Road') {
+              snap['display_class'] = 'No Trash Detected';
+            } else if (snap['display_class'] == 'Slightly Dirty Road' || snap['display_class'] == 'Very Dirty Road') {
+              snap['display_class'] = 'Trash Detected';
+            }
+            allSnaps.add(snap);
+          }
         }
       } catch (e) {
         debugPrint("Error fetching Garbage AI: $e");
-      }
-
-      try {
-        final res2 = await http.get(Uri.parse('$HEALTH_AI_URL/api/snapshots'), headers: {'ngrok-skip-browser-warning': 'true'});
-        if (res2.statusCode == 200) {
-          final data = json.decode(res2.body);
-          allSnaps.addAll(data['snapshots'] ?? []);
-        }
-      } catch (e) {
-        debugPrint("Error fetching Road Health AI from HEALTH_AI_URL: $e");
-        try {
-            final res3 = await http.get(Uri.parse('http://127.0.0.1:5002/api/snapshots'));
-            if (res3.statusCode == 200) {
-              final data = json.decode(res3.body);
-              allSnaps.addAll(data['snapshots'] ?? []);
-            }
-        } catch (e2) {
-            debugPrint("Error fetching Road Health AI from localhost: $e2");
-        }
       }
       
       // Sort by timestamp descending
@@ -84,10 +73,8 @@ class _DatabaseScreenState extends State<DatabaseScreen> with SingleTickerProvid
           _snapshots = allSnaps;
           _stats = {
             "total": _snapshots.length,
-            "Clean Road": _snapshots.where((s) => s['display_class'] == 'Clean Road').length,
-            "Slightly Dirty Road": _snapshots.where((s) => s['display_class'] == 'Slightly Dirty Road').length,
-            "Very Dirty Road": _snapshots.where((s) => s['display_class'] == 'Very Dirty Road').length,
-            "Pothole Detected": _snapshots.where((s) => s['display_class'] == 'Pothole Detected').length,
+            "No Trash Detected": _snapshots.where((s) => s['display_class'] == 'No Trash Detected').length,
+            "Trash Detected": _snapshots.where((s) => s['display_class'] == 'Trash Detected').length,
             "Not a Road": _snapshots.where((s) => s['display_class'] == 'Not a Road').length,
           };
         });
@@ -105,10 +92,9 @@ class _DatabaseScreenState extends State<DatabaseScreen> with SingleTickerProvid
   }
 
   Color _getClassColor(String className) {
-    if (className == 'Clean Road') return const Color(0xFF00E676);
-    if (className == 'Slightly Dirty Road') return const Color(0xFFFF9100);
-    if (className == 'Very Dirty Road') return const Color(0xFFFF1744);
-    if (className == 'Pothole Detected') return const Color(0xFFD500F9);
+    if (className == 'No Trash Detected') return const Color(0xFF00E676);
+    if (className == 'Trash Detected') return const Color(0xFFFF1744);
+    if (className == 'Not a Road') return const Color(0xFF8A8F9D);
     return const Color(0xFF8A8F9D);
   }
 
@@ -255,10 +241,8 @@ class _DatabaseScreenState extends State<DatabaseScreen> with SingleTickerProvid
               child: Row(
                 children: [
                   _buildFolderTab('All', Icons.folder_copy_rounded, Colors.blue),
-                  _buildFolderTab('Clean Road', Icons.folder_rounded, const Color(0xFF00E676)),
-                  _buildFolderTab('Slightly Dirty Road', Icons.folder_rounded, const Color(0xFFFF9100)),
-                  _buildFolderTab('Very Dirty Road', Icons.folder_special_rounded, const Color(0xFFFF1744)),
-                          _buildFolderTab('Pothole Detected', Icons.warning_rounded, const Color(0xFFD500F9)),
+                  _buildFolderTab('No Trash Detected', Icons.folder_rounded, const Color(0xFF00E676)),
+                  _buildFolderTab('Trash Detected', Icons.folder_special_rounded, const Color(0xFFFF1744)),
                   _buildFolderTab('Not a Road', Icons.folder_off_rounded, const Color(0xFF8A8F9D)),
                 ],
               ),
@@ -269,9 +253,9 @@ class _DatabaseScreenState extends State<DatabaseScreen> with SingleTickerProvid
             Row(
               children: [
                 _buildStatCard("Total Captures", _stats['total'] ?? 0),
-                _buildStatCard("Clean Roads", _stats['Clean Road'] ?? 0, const Color(0xFF00E676)),
-                _buildStatCard("Slightly Dirty", _stats['Slightly Dirty Road'] ?? 0, const Color(0xFFFF9100)),
-                _buildStatCard("Very Dirty", _stats['Very Dirty Road'] ?? 0, const Color(0xFFFF1744)),
+                _buildStatCard("No Trash Detected", _stats['No Trash Detected'] ?? 0, const Color(0xFF00E676)),
+                _buildStatCard("Trash Detected", _stats['Trash Detected'] ?? 0, const Color(0xFFFF1744)),
+                _buildStatCard("Not a Road", _stats['Not a Road'] ?? 0, const Color(0xFF8A8F9D)),
               ],
             ),
             const SizedBox(height: 30),

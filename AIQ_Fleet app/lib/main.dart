@@ -43,7 +43,11 @@ void main() async {
   }
   final savedUrlV4 = prefs.getString('garbage_ai_v4_url');
   if (savedUrlV4 != null && savedUrlV4.isNotEmpty) {
-    GARBAGE_AI_V4_URL = savedUrlV4;
+    if (savedUrlV4.contains('pointer-staff-prodigy-v4')) {
+      await prefs.remove('garbage_ai_v4_url');
+    } else {
+      GARBAGE_AI_V4_URL = savedUrlV4;
+    }
   }
   MODEL_VERSION = 4; // Forced to V4
   

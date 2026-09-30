@@ -147,9 +147,9 @@ async def process_frame_route(request: Request, background_tasks: BackgroundTask
 
         results = pothole_model(frame, verbose=False)
         
-        has_pothole = False
-        has_bad_road = False
-        has_good_road = False
+        conf_pothole = 0.0
+        conf_bad_road = 0.0
+        conf_good_road = 0.0
         
         for result in results:
             for box in result.boxes:
@@ -167,16 +167,16 @@ async def process_frame_route(request: Request, background_tasks: BackgroundTask
                 cv2.putText(frame, f"{cls_name} {conf:.2f}", (x1, max(y1 - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
                 
                 if cls_id in [3, 7, 8]:
-                    has_pothole = True
+                    conf_pothole = max(conf_pothole, conf)
                 elif cls_id in [2, 4, 5, 6]:
-                    has_bad_road = True
+                    conf_bad_road = max(conf_bad_road, conf)
                 elif cls_id == 1:
-                    has_good_road = True
+                    conf_good_road = max(conf_good_road, conf)
 
         overall_status = "Good Condition"
-        if has_pothole:
+        if conf_pothole >= 0.50:
             overall_status = "Pothole Detected"
-        elif has_bad_road:
+        elif conf_bad_road > conf_good_road and conf_bad_road >= 0.55:
             overall_status = "Bad Road"
             
         filename_only = f"event_{int(time.time())}.jpg"

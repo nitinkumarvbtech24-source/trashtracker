@@ -214,6 +214,17 @@ async def process_frame(req: ProcessFrameRequest):
         with open(filepath, "wb") as f:
             f.write(base64.b64decode(annotated_b64))
 
+        snapshot_entry = {
+            "display_class": road_status_mapped,
+            "confidence": res["confidence"] / 100.0,
+            "image_url": f"/images/{res['predicted_class']}/{filename}",
+            "timestamp": datetime.datetime.now().isoformat(),
+            "vehicle_number": req.vehicle_number,
+        }
+        recent_snapshots.insert(0, snapshot_entry)
+        if len(recent_snapshots) > 100:
+            recent_snapshots.pop()
+
         return JSONResponse(content={
             "road_status": road_status_mapped,
             "road_confidence": res["confidence"] / 100.0,

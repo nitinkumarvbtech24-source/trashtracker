@@ -491,23 +491,25 @@ class _CameraScreenState extends State<CameraScreen> {
                                     garbageStatus = rawGarbage.replaceAll('_', ' ').toUpperCase();
                                   }
                                   String healthStatus = (res?['health']?['road_status']?.toString() ?? 'UNKNOWN').replaceAll('_', ' ').toUpperCase();
-                                  String displayStatus = "$garbageStatus / $healthStatus";
-                                  if (rawGarbage == 'NOT A ROAD') displayStatus = "NOT A ROAD";
-                                  
-                                  return Column(
-                                    children: [
-                                      Text(
-                                        displayStatus,
-                                        textAlign: TextAlign.center,
-                                        style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
-                                      ),
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        "Confidence: ${((res?['garbage']?['road_confidence'] ?? 0.0) * 100).toStringAsFixed(1)}%",
-                                        style: const TextStyle(color: Colors.white70, fontSize: 12),
-                                      ),
-                                    ],
-                                  );
+                                  if (rawGarbage == 'NOT A ROAD') {
+                                    return Column(
+                                      children: [
+                                        const Text("NOT A ROAD", textAlign: TextAlign.center, style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
+                                        const SizedBox(height: 2),
+                                        Text("Confidence: ${((res?['garbage']?['road_confidence'] ?? 0.0) * 100).toStringAsFixed(1)}%", style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                                      ],
+                                    );
+                                  } else {
+                                    return Column(
+                                      children: [
+                                        Text("Cleanliness: $garbageStatus", textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
+                                        const SizedBox(height: 2),
+                                        Text("Road Health: $healthStatus", textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
+                                        const SizedBox(height: 2),
+                                        Text("Confidence: ${((res?['garbage']?['road_confidence'] ?? 0.0) * 100).toStringAsFixed(1)}%", style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                                      ],
+                                    );
+                                  }
                                 },
                               ),
                             ],
