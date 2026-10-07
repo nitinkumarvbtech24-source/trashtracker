@@ -205,7 +205,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     setState(() => _isSearching = true);
     try {
       final url = Uri.parse('https://nominatim.openstreetmap.org/search?q=$query&format=json&limit=1');
-      final response = await http.get(url, headers: {'User-Agent': 'com.example.street_aiq'});
+      final response = await http.get(url, headers: {'User-Agent': 'com.nitin.trashtracker'});
       if (response.statusCode == 200) {
         final data = json.decode(response.body) as List;
         if (data.isNotEmpty) {
@@ -1292,7 +1292,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     children: [
                       TileLayer(
                         urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                        userAgentPackageName: 'com.example.street_aiq',
+                        userAgentPackageName: 'com.nitin.trashtracker',
                         tileProvider: kIsWeb ? null : CachedTileProvider(store: MapCacheService.store),
                       ),
                       PolygonLayer(

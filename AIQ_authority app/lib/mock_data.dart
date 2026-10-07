@@ -111,7 +111,7 @@ final List<VehicleData> initialVehicles = [
     potholesFound: 11,
     routeIndex: 2,
     color: "#3b82f6",
-    activeModel: "RoadScan AI v4.0",
+    activeModel: "RoadScan AI v5.0",
   ),
   VehicleData(
     id: "V-103",

@@ -709,7 +709,7 @@ class _HealthScreenState extends State<HealthScreen> {
                           children: [
                             TileLayer(
                               urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                              userAgentPackageName: 'com.example.street_aiq',
+                              userAgentPackageName: 'com.nitin.trashtracker',
                               tileProvider: kIsWeb ? null : CachedTileProvider(store: MapCacheService.store),
                             ),
                             MarkerLayer(
@@ -858,7 +858,7 @@ class _HealthScreenState extends State<HealthScreen> {
           children: [
             TileLayer(
               urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'com.example.street_aiq',
+              userAgentPackageName: 'com.nitin.trashtracker',
               tileProvider: kIsWeb ? null : CachedTileProvider(store: MapCacheService.store),
             ),
             if (_selectedWard != null)

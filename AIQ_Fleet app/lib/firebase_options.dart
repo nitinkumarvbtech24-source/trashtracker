@@ -63,7 +63,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: '1038439641750',
     projectId: 'takemytrash',
     storageBucket: 'takemytrash.firebasestorage.app',
-    iosBundleId: 'com.example.takeMyTrash',
+    iosBundleId: 'com.nitin.trashtracker',
   );
 
   static const FirebaseOptions macos = FirebaseOptions(
@@ -72,7 +72,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: '1038439641750',
     projectId: 'takemytrash',
     storageBucket: 'takemytrash.firebasestorage.app',
-    iosBundleId: 'com.example.takeMyTrash',
+    iosBundleId: 'com.nitin.trashtracker',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(

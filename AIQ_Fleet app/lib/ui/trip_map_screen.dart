@@ -195,7 +195,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
               children: [
                 TileLayer(
                   urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.example.street_aiq_tipper_app',
+                  userAgentPackageName: 'com.nitin.trashtracker',
                 ),
                 if (_trail.isNotEmpty)
                   PolylineLayer(

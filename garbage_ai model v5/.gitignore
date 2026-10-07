@@ -1,0 +1,29 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment & IDE
+.env
+.venv
+env/
+venv/
+ENV/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Heavy raw image directories (exceeds GitHub's 500MB HTTP push limit)
+road cleanliness/
+road cleanliness final (1)/
+dataset/classification/
+dataset/raw/
+dataset/auto_labeled/images/
+
+models/
+*.pth
+
+# App data
+snapshots/
+history.json

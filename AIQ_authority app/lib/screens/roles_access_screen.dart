@@ -2558,7 +2558,7 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                   children: [
                     TileLayer(
                       urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'com.example.app',
+                      userAgentPackageName: 'com.nitin.trashtracker',
                     ),
                     Builder(
                       builder: (context) {
@@ -3138,7 +3138,7 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                           children: [
                             TileLayer(
                               urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                              userAgentPackageName: 'com.example.app',
+                              userAgentPackageName: 'com.nitin.trashtracker',
                             ),
                             Builder(
                               builder: (context) {

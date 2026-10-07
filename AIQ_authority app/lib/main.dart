@@ -34,15 +34,15 @@ void main() async {
   if (savedUrlV3 != null && savedUrlV3.isNotEmpty) {
     GARBAGE_AI_V3_URL = savedUrlV3;
   }
-  final savedUrlV4 = prefs.getString('garbage_ai_v4_url');
+  final savedUrlV4 = prefs.getString('garbage_ai_v5_url');
   if (savedUrlV4 != null && savedUrlV4.isNotEmpty) {
-    if (savedUrlV4.contains('pointer-staff-prodigy-v4')) {
-      await prefs.remove('garbage_ai_v4_url');
+    if (savedUrlV4.contains('pointer-staff-prodigy-v5')) {
+      await prefs.remove('garbage_ai_v5_url');
     } else {
-      GARBAGE_AI_V4_URL = savedUrlV4;
+      GARBAGE_AI_V5_URL = savedUrlV4;
     }
   }
-  MODEL_VERSION = 4; // Forced to V4
+  MODEL_VERSION = 5; // Forced to V5
 
 
   runApp(const StreetAIQApp());

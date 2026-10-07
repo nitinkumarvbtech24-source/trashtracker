@@ -966,7 +966,7 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
           children: [
             TileLayer(
               urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'com.example.street_aiq',
+              userAgentPackageName: 'com.nitin.trashtracker',
               tileProvider: kIsWeb ? null : CachedTileProvider(store: MapCacheService.store),
             ),
             if (_showAssignedWard && widget.ward != null)
