@@ -646,9 +646,103 @@ class CameraService extends ChangeNotifier {
 
       final now = DateTime.now();
       final timestamp = now.millisecondsSinceEpoch;
-      final uuidStr = const Uuid().v4();
 
-      // ALWAYS save locally first to guaranteed persistent storage
+      // 1. FAST DIRECT ONLINE PATH (when queue is empty and internet/server is available)
+      if (_pendingQueueCount == 0) {
+        try {
+          final base64Image = base64Encode(bytes);
+          final garbageResponse = await http.post(
+            Uri.parse('$activeGarbageAiUrl/process_frame'),
+            headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+            body: json.encode({
+              'image': 'data:image/jpeg;base64,$base64Image',
+              'lat': lat,
+              'lng': lng,
+              'vehicle_number': vehicleNumber,
+              'ward': calculatedWard,
+              'zone': calculatedZone,
+              if (sessionId != null) 'session_id': sessionId,
+              if (pointType != null) 'point_type': pointType
+            }),
+          ).timeout(const Duration(seconds: 12));
+
+          if (garbageResponse.statusCode == 200) {
+            _isGarbageTunnelConnected = true;
+            _isGarbageBackendConnected = true;
+
+            final directResult = await _handleGarbageSuccess(
+              responseBody: garbageResponse.body,
+              rawBytes: bytes,
+              base64Image: base64Image,
+              lat: lat,
+              lng: lng,
+              vehicleNumber: vehicleNumber,
+              ward: calculatedWard,
+              zone: calculatedZone,
+              sessionId: sessionId,
+              pointType: pointType,
+              timestamp: timestamp,
+            );
+
+            // Trigger non-blocking Health AI
+            _sendToHealthAi(base64Image, lat, lng, vehicleNumber, calculatedWard, calculatedZone, sessionId, pointType);
+
+            return directResult;
+          }
+        } catch (netErr) {
+          debugPrint("Direct upload failed (unstable connection / server down): $netErr");
+          _isGarbageBackendConnected = false;
+          notifyListeners();
+        }
+      }
+
+      // 2. OFFLINE / UNSTABLE FALLBACK: Save to persistent SQLite queue (strict FIFO)
+      await _queueSnapshotLocally(
+        bytes: bytes,
+        lat: lat,
+        lng: lng,
+        vehicleNumber: vehicleNumber,
+        ward: calculatedWard,
+        zone: calculatedZone,
+        sessionId: sessionId,
+        pointType: pointType,
+        timestamp: timestamp,
+      );
+
+      // If backend is active and worker not running, attempt queue sync
+      if (_isGarbageBackendConnected && !_isProcessingQueue) {
+        processQueueSequentially();
+      }
+
+      final offlineResult = {
+        'offline': true,
+        'queued': true,
+        'pendingCount': _pendingQueueCount,
+        'road_status': 'Queued (Offline)',
+        'message': 'Saved locally. Will sync sequentially when server is online.',
+      };
+      latestResult = offlineResult;
+      notifyListeners();
+      return offlineResult;
+    } catch (e) {
+      debugPrint("Error taking snapshot: $e");
+      return null;
+    }
+  }
+
+  Future<void> _queueSnapshotLocally({
+    required List<int> bytes,
+    required double lat,
+    required double lng,
+    required String vehicleNumber,
+    required String ward,
+    required String zone,
+    String? sessionId,
+    String? pointType,
+    required int timestamp,
+  }) async {
+    try {
+      final uuidStr = const Uuid().v4();
       final directory = await getApplicationDocumentsDirectory();
       final queueDir = Directory('${directory.path}/queued_snapshots');
       if (!await queueDir.exists()) {
@@ -657,14 +751,13 @@ class CameraService extends ChangeNotifier {
       final queueFile = File('${queueDir.path}/snap_${timestamp}_${uuidStr.substring(0, 8)}.jpg');
       await queueFile.writeAsBytes(bytes);
 
-      // Register in local SQLite persistent queue (FIFO order)
       await DatabaseService().insertQueuedSnapshot({
         'filePath': queueFile.path,
         'lat': lat,
         'lng': lng,
         'vehicleNumber': vehicleNumber,
-        'ward': calculatedWard,
-        'zone': calculatedZone,
+        'ward': ward,
+        'zone': zone,
         'sessionId': sessionId,
         'pointType': pointType,
         'timestamp': timestamp,
@@ -674,27 +767,181 @@ class CameraService extends ChangeNotifier {
       });
 
       await refreshPendingQueueCount();
+    } catch (e) {
+      debugPrint("Error enqueueing snapshot: $e");
+    }
+  }
 
-      // Process sequential queue
-      final result = await processQueueSequentially();
-      if (result != null) {
-        return result;
+  Future<Map<String, dynamic>> _handleGarbageSuccess({
+    required String responseBody,
+    required List<int> rawBytes,
+    required String base64Image,
+    required double lat,
+    required double lng,
+    required String vehicleNumber,
+    required String ward,
+    required String zone,
+    String? sessionId,
+    String? pointType,
+    required int timestamp,
+  }) async {
+    final resBody = json.decode(responseBody);
+    final roadStatus = resBody['road_status'] ?? 'UNKNOWN';
+    final confidence = (resBody['road_confidence'] as num?)?.toDouble() ?? 0.0;
+    final imageUrl = resBody['image_url'];
+
+    if (_latestGarbageStatus != roadStatus) {
+      _latestGarbageStatus = roadStatus;
+    }
+
+    // Analytics updates
+    _imagesCapturedToday++;
+    if (roadStatus == 'Very Dirty Road' || roadStatus == 'Slightly Dirty Road' || roadStatus == 'Trash Detected') {
+      _imagesFlaggedToday++;
+    }
+
+    // Sync analytics to Firestore
+    try {
+      FirebaseFirestore.instance.collection('vehicles').doc(vehicleNumber)
+        .collection('daily_stats').doc(_todayDateString)
+        .set({
+          'images_captured': _imagesCapturedToday,
+          'images_flagged': _imagesFlaggedToday,
+          'last_updated': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+    } catch (fbStatErr) {
+      debugPrint("Firestore stats update error: $fbStatErr");
+    }
+
+    final combinedResult = <String, dynamic>{
+      'garbage': {
+        'road_status': roadStatus,
+        'road_confidence': confidence,
+      },
+      'road_status': roadStatus,
+      'confidence': confidence,
+    };
+
+    // Download annotated image or fallback to raw
+    try {
+      List<int> imageToSave = rawBytes;
+      if (imageUrl != null) {
+        final annotatedResponse = await http.get(
+          Uri.parse('$activeGarbageAiUrl$imageUrl'),
+          headers: {'ngrok-skip-browser-warning': 'true'},
+        ).timeout(const Duration(seconds: 10));
+        if (annotatedResponse.statusCode == 200) {
+          imageToSave = annotatedResponse.bodyBytes;
+        }
       }
 
-      // If offline / queued
-      final offlineResult = {
-        'offline': true,
-        'queued': true,
-        'pendingCount': _pendingQueueCount,
-        'road_status': 'Queued (Offline)',
-        'message': 'No internet. Saved locally to device queue.',
-      };
-      latestResult = offlineResult;
-      notifyListeners();
-      return offlineResult;
+      final directory = await getApplicationDocumentsDirectory();
+      final dateStr = DateTime.fromMillisecondsSinceEpoch(timestamp).toIso8601String().split('T')[0];
+      final localFolder = Directory('${directory.path}/local_flags/$dateStr');
+      if (!await localFolder.exists()) {
+        await localFolder.create(recursive: true);
+      }
+      final localFile = File('${localFolder.path}/$timestamp.jpg');
+      await localFile.writeAsBytes(imageToSave);
+
+      // Save to device gallery
+      try {
+        final hasAccess = await Gal.hasAccess(toAlbum: true);
+        if (!hasAccess) await Gal.requestAccess(toAlbum: true);
+        await Gal.putImage(localFile.path, album: 'AIQ_Fleet_$dateStr');
+      } catch (galErr) {
+        debugPrint("Gallery save error: $galErr");
+      }
+
+      // Insert to local database
+      await DatabaseService().insertLocalFlag(localFile.path, roadStatus, confidence, timestamp, lat, lng);
     } catch (e) {
-      debugPrint("Error taking snapshot: $e");
-      return null;
+      debugPrint("Error downloading/saving annotated image: $e");
+    }
+
+    if (imageUrl != null) {
+      if (roadStatus == 'Trash Detected' || roadStatus == 'Very Dirty Road' || roadStatus == 'Slightly Dirty Road') {
+        try {
+          await FirebaseFirestore.instance.collection('trash_spots').add({
+            'lat': lat,
+            'lng': lng,
+            'road_status': roadStatus,
+            'confidence': confidence,
+            'image_url': '$activeGarbageAiUrl$imageUrl',
+            'timestamp': FieldValue.serverTimestamp(),
+            'status': 'Flagged',
+            'vehicle_number': vehicleNumber,
+            'ward': ward,
+            'zone': zone,
+            if (sessionId != null) 'session_id': sessionId,
+            if (pointType != null) 'point_type': pointType,
+          });
+        } catch (fbErr) {
+          debugPrint("Firestore Upload Error: $fbErr");
+        }
+      }
+    }
+
+    latestResult = combinedResult;
+    notifyListeners();
+    return combinedResult;
+  }
+
+  Future<void> _sendToHealthAi(
+    String base64Image,
+    double lat,
+    double lng,
+    String vehicleNumber,
+    String ward,
+    String zone,
+    String? sessionId,
+    String? pointType,
+  ) async {
+    try {
+      final healthResponse = await http.post(
+        Uri.parse('$HEALTH_AI_URL/process_frame'),
+        headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+        body: json.encode({
+          'image': 'data:image/jpeg;base64,$base64Image',
+          'lat': lat,
+          'lng': lng,
+          'vehicle_number': vehicleNumber,
+          'ward': ward,
+          'zone': zone,
+          if (sessionId != null) 'session_id': sessionId,
+          if (pointType != null) 'point_type': pointType
+        }),
+      ).timeout(const Duration(seconds: 4));
+
+      if (healthResponse.statusCode == 200) {
+        _isHealthTunnelConnected = true;
+        _isHealthBackendConnected = true;
+
+        final resBody = json.decode(healthResponse.body);
+        final roadStatus = resBody['road_status'] ?? 'UNKNOWN';
+        final imageUrl = resBody['image_url'];
+
+        if (_latestHealthStatus != roadStatus) {
+          _latestHealthStatus = roadStatus;
+          notifyListeners();
+        }
+
+        if (imageUrl != null && (roadStatus == 'Pothole Detected' || roadStatus == 'Bad Road')) {
+          await FirebaseFirestore.instance.collection('health_spots').add({
+            'lat': lat,
+            'lng': lng,
+            'road_status': roadStatus,
+            'image_url': '$HEALTH_AI_URL$imageUrl',
+            'timestamp': FieldValue.serverTimestamp(),
+            'vehicle_number': vehicleNumber,
+            'ward': ward,
+            'status': 'Flagged',
+            'zone': zone,
+          });
+        }
+      }
+    } catch (_) {
+      // Non-blocking fallback
     }
   }
 
@@ -741,9 +988,6 @@ class CameraService extends ChangeNotifier {
         _queueStatusMessage = 'Uploading queued item #$id ($_pendingQueueCount remaining)...';
         notifyListeners();
 
-        Map<String, dynamic> combinedResult = {};
-        bool garbageSuccess = false;
-
         // 1. Send to Garbage AI
         try {
           final garbageResponse = await http.post(
@@ -762,102 +1006,41 @@ class CameraService extends ChangeNotifier {
           ).timeout(const Duration(seconds: 15));
 
           if (garbageResponse.statusCode == 200) {
-            garbageSuccess = true;
             _isGarbageTunnelConnected = true;
             _isGarbageBackendConnected = true;
 
-            final resBody = json.decode(garbageResponse.body);
-            final roadStatus = resBody['road_status'] ?? 'UNKNOWN';
-            final confidence = (resBody['road_confidence'] as num?)?.toDouble() ?? 0.0;
-            final imageUrl = resBody['image_url'];
+            final itemResult = await _handleGarbageSuccess(
+              responseBody: garbageResponse.body,
+              rawBytes: bytes,
+              base64Image: base64Image,
+              lat: lat,
+              lng: lng,
+              vehicleNumber: vehicleNumber,
+              ward: ward,
+              zone: zone,
+              sessionId: sessionId,
+              pointType: pointType,
+              timestamp: timestamp,
+            );
+            lastProcessedResult = itemResult;
 
-            if (_latestGarbageStatus != roadStatus) {
-              _latestGarbageStatus = roadStatus;
-            }
+            // Non-blocking Health AI
+            _sendToHealthAi(base64Image, lat, lng, vehicleNumber, ward, zone, sessionId, pointType);
 
-            // Analytics updates
-            _imagesCapturedToday++;
-            if (roadStatus == 'Very Dirty Road' || roadStatus == 'Slightly Dirty Road' || roadStatus == 'Trash Detected') {
-              _imagesFlaggedToday++;
-            }
-
-            // Sync analytics to Firestore
+            // Successfully processed! Remove from SQLite queue and delete temp file
+            await DatabaseService().deleteQueuedSnapshot(id);
             try {
-              FirebaseFirestore.instance.collection('vehicles').doc(vehicleNumber)
-                .collection('daily_stats').doc(_todayDateString)
-                .set({
-                  'images_captured': _imagesCapturedToday,
-                  'images_flagged': _imagesFlaggedToday,
-                  'last_updated': FieldValue.serverTimestamp(),
-                }, SetOptions(merge: true));
-            } catch (fbStatErr) {
-              debugPrint("Firestore stats update error: $fbStatErr");
-            }
-
-            combinedResult['garbage'] = {
-              'road_status': roadStatus,
-              'road_confidence': confidence
-            };
-
-            // Download annotated image or fallback to raw
-            try {
-              List<int> imageToSave = bytes;
-              if (imageUrl != null) {
-                final annotatedResponse = await http.get(
-                  Uri.parse('$activeGarbageAiUrl$imageUrl'),
-                  headers: {'ngrok-skip-browser-warning': 'true'},
-                ).timeout(const Duration(seconds: 10));
-                if (annotatedResponse.statusCode == 200) {
-                  imageToSave = annotatedResponse.bodyBytes;
-                }
+              if (await file.exists()) {
+                await file.delete();
               }
-
-              final directory = await getApplicationDocumentsDirectory();
-              final dateStr = DateTime.fromMillisecondsSinceEpoch(timestamp).toIso8601String().split('T')[0];
-              final localFolder = Directory('${directory.path}/local_flags/$dateStr');
-              if (!await localFolder.exists()) {
-                await localFolder.create(recursive: true);
-              }
-              final localFile = File('${localFolder.path}/$timestamp.jpg');
-              await localFile.writeAsBytes(imageToSave);
-
-              // Save to device gallery
-              try {
-                final hasAccess = await Gal.hasAccess(toAlbum: true);
-                if (!hasAccess) await Gal.requestAccess(toAlbum: true);
-                await Gal.putImage(localFile.path, album: 'AIQ_Fleet_$dateStr');
-              } catch (galErr) {
-                debugPrint("Gallery save error: $galErr");
-              }
-
-              // Insert to local database
-              await DatabaseService().insertLocalFlag(localFile.path, roadStatus, confidence, timestamp, lat, lng);
             } catch (e) {
-              debugPrint("Error downloading/saving annotated image: $e");
+              debugPrint("Queue file deletion error: $e");
             }
 
-            if (imageUrl != null) {
-              if (roadStatus == 'Trash Detected' || roadStatus == 'Very Dirty Road' || roadStatus == 'Slightly Dirty Road') {
-                try {
-                  await FirebaseFirestore.instance.collection('trash_spots').add({
-                    'lat': lat,
-                    'lng': lng,
-                    'road_status': roadStatus,
-                    'confidence': confidence,
-                    'image_url': '$activeGarbageAiUrl$imageUrl',
-                    'timestamp': FieldValue.serverTimestamp(),
-                    'status': 'Flagged',
-                    'vehicle_number': vehicleNumber,
-                    'ward': ward,
-                    'zone': zone,
-                    if (sessionId != null) 'session_id': sessionId,
-                    if (pointType != null) 'point_type': pointType,
-                  });
-                } catch (fbErr) {
-                  debugPrint("Firestore Upload Error: $fbErr");
-                }
-              }
-            }
+            await refreshPendingQueueCount();
+          } else {
+            _queueStatusMessage = 'Server error (${garbageResponse.statusCode}). Paused queue.';
+            break;
           }
         } catch (e) {
           debugPrint("Garbage AI sync error: $e");
@@ -868,84 +1051,6 @@ class CameraService extends ChangeNotifier {
           // Break loop to preserve strict sequential FIFO order
           break;
         }
-
-        if (!garbageSuccess) {
-          _queueStatusMessage = 'Connection failed. Paused queue.';
-          break;
-        }
-
-        // 2. Send to Health AI
-        try {
-          final healthResponse = await http.post(
-            Uri.parse('$HEALTH_AI_URL/process_frame'),
-            headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
-            body: json.encode({
-              'image': 'data:image/jpeg;base64,$base64Image',
-              'lat': lat,
-              'lng': lng,
-              'vehicle_number': vehicleNumber,
-              'ward': ward,
-              'zone': zone,
-              if (sessionId != null) 'session_id': sessionId,
-              if (pointType != null) 'point_type': pointType
-            }),
-          ).timeout(const Duration(seconds: 12));
-
-          if (healthResponse.statusCode == 200) {
-            _isHealthTunnelConnected = true;
-            _isHealthBackendConnected = true;
-
-            final resBody = json.decode(healthResponse.body);
-            final roadStatus = resBody['road_status'] ?? 'UNKNOWN';
-            final imageUrl = resBody['image_url'];
-
-            if (_latestHealthStatus != roadStatus) {
-              _latestHealthStatus = roadStatus;
-            }
-
-            combinedResult['health'] = {
-              'road_status': roadStatus,
-            };
-
-            if (imageUrl != null) {
-              if (roadStatus == 'Pothole Detected' || roadStatus == 'Bad Road') {
-                try {
-                  await FirebaseFirestore.instance.collection('health_spots').add({
-                    'lat': lat,
-                    'lng': lng,
-                    'road_status': roadStatus,
-                    'image_url': '$HEALTH_AI_URL$imageUrl',
-                    'timestamp': FieldValue.serverTimestamp(),
-                    'vehicle_number': vehicleNumber,
-                    'ward': ward,
-                    'status': 'Flagged',
-                    'zone': zone,
-                  });
-                } catch (e) {
-                  debugPrint("Health Firestore Error: $e");
-                }
-              }
-            }
-          }
-        } catch (e) {
-          debugPrint("Health AI Error: $e");
-        }
-
-        latestResult = combinedResult;
-        lastProcessedResult = combinedResult;
-
-        // Successfully sent! Remove from SQLite queue and delete temp file
-        await DatabaseService().deleteQueuedSnapshot(id);
-        try {
-          if (await file.exists()) {
-            await file.delete();
-          }
-        } catch (e) {
-          debugPrint("Queue file deletion error: $e");
-        }
-
-        await refreshPendingQueueCount();
-        notifyListeners();
       }
     } catch (e) {
       debugPrint("Sequential queue processor error: $e");
