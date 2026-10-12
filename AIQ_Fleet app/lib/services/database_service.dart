@@ -13,8 +13,10 @@ class DatabaseService {
   // In-memory fallback for web
   final List<Map<String, dynamic>> _memTelemetry = [];
   final List<Map<String, dynamic>> _memVideo = [];
+  final List<Map<String, dynamic>> _memQueuedSnapshots = [];
   int _memTelemetryId = 0;
   int _memVideoId = 0;
+  int _memQueueId = 0;
 
   Future<Database?> get database async {
     if (_isWeb) return null;
@@ -31,38 +33,77 @@ class DatabaseService {
 
       return await openDatabase(
         path,
-        version: 1,
-      onCreate: (db, version) async {
-        await db.execute('''
-          CREATE TABLE telemetry (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            lat REAL,
-            lng REAL,
-            speed REAL,
-            timestamp INTEGER
-          )
-        ''');
+        version: 2,
+        onCreate: (db, version) async {
+          await db.execute('''
+            CREATE TABLE telemetry (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              lat REAL,
+              lng REAL,
+              speed REAL,
+              timestamp INTEGER
+            )
+          ''');
 
-        await db.execute('''
-          CREATE TABLE video_chunks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            filePath TEXT,
-            timestamp INTEGER
-          )
-        ''');
+          await db.execute('''
+            CREATE TABLE video_chunks (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              filePath TEXT,
+              timestamp INTEGER
+            )
+          ''');
 
-        await db.execute('''
-          CREATE TABLE local_flags (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            filePath TEXT,
-            roadStatus TEXT,
-            confidence REAL,
-            timestamp INTEGER,
-            lat REAL,
-            lng REAL
-          )
-        ''');
-      },
+          await db.execute('''
+            CREATE TABLE local_flags (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              filePath TEXT,
+              roadStatus TEXT,
+              confidence REAL,
+              timestamp INTEGER,
+              lat REAL,
+              lng REAL
+            )
+          ''');
+
+          await db.execute('''
+            CREATE TABLE queued_snapshots (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              filePath TEXT,
+              lat REAL,
+              lng REAL,
+              vehicleNumber TEXT,
+              ward TEXT,
+              zone TEXT,
+              sessionId TEXT,
+              pointType TEXT,
+              timestamp INTEGER,
+              status TEXT,
+              retryCount INTEGER DEFAULT 0,
+              createdAt INTEGER
+            )
+          ''');
+        },
+        onUpgrade: (db, oldVersion, newVersion) async {
+          if (oldVersion < 2) {
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS queued_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filePath TEXT,
+                lat REAL,
+                lng REAL,
+                vehicleNumber TEXT,
+                ward TEXT,
+                zone TEXT,
+                sessionId TEXT,
+                pointType TEXT,
+                timestamp INTEGER,
+                status TEXT,
+                retryCount INTEGER DEFAULT 0,
+                createdAt INTEGER
+              )
+            ''');
+          }
+        },
       );
     } catch (e) {
       debugPrint("Error initializing db: \$e");
@@ -177,5 +218,97 @@ class DatabaseService {
       return await db.query('local_flags', orderBy: 'timestamp DESC');
     }
     return [];
+  }
+
+  // --- Queued Snapshots (Offline Sequential Queue) ---
+  Future<int> insertQueuedSnapshot(Map<String, dynamic> data) async {
+    if (_isWeb) {
+      final newId = ++_memQueueId;
+      final copy = Map<String, dynamic>.from(data);
+      copy['id'] = newId;
+      _memQueuedSnapshots.add(copy);
+      return newId;
+    }
+    final db = await database;
+    if (db != null) {
+      return await db.insert('queued_snapshots', data);
+    }
+    return -1;
+  }
+
+  Future<Map<String, dynamic>?> getNextPendingQueuedSnapshot() async {
+    if (_isWeb) {
+      if (_memQueuedSnapshots.isEmpty) return null;
+      _memQueuedSnapshots.sort((a, b) => (a['id'] as int).compareTo(b['id'] as int));
+      return Map<String, dynamic>.from(_memQueuedSnapshots.first);
+    }
+    final db = await database;
+    if (db != null) {
+      final list = await db.query(
+        'queued_snapshots',
+        orderBy: 'id ASC',
+        limit: 1,
+      );
+      if (list.isNotEmpty) {
+        return Map<String, dynamic>.from(list.first);
+      }
+    }
+    return null;
+  }
+
+  Future<List<Map<String, dynamic>>> getAllQueuedSnapshots() async {
+    if (_isWeb) {
+      return List<Map<String, dynamic>>.from(_memQueuedSnapshots);
+    }
+    final db = await database;
+    if (db != null) {
+      return await db.query('queued_snapshots', orderBy: 'id ASC');
+    }
+    return [];
+  }
+
+  Future<int> getQueuedSnapshotCount() async {
+    if (_isWeb) {
+      return _memQueuedSnapshots.length;
+    }
+    final db = await database;
+    if (db != null) {
+      final count = Sqflite.firstIntValue(
+        await db.rawQuery('SELECT COUNT(*) FROM queued_snapshots'),
+      );
+      return count ?? 0;
+    }
+    return 0;
+  }
+
+  Future<void> deleteQueuedSnapshot(int id) async {
+    if (_isWeb) {
+      _memQueuedSnapshots.removeWhere((item) => item['id'] == id);
+      return;
+    }
+    final db = await database;
+    if (db != null) {
+      await db.delete('queued_snapshots', where: 'id = ?', whereArgs: [id]);
+    }
+  }
+
+  Future<void> incrementQueuedSnapshotRetry(int id) async {
+    if (_isWeb) {
+      final idx = _memQueuedSnapshots.indexWhere((item) => item['id'] == id);
+      if (idx != -1) {
+        final current = _memQueuedSnapshots[idx];
+        current['retryCount'] = (current['retryCount'] ?? 0) + 1;
+        current['status'] = 'pending';
+      }
+      return;
+    }
+    final db = await database;
+    if (db != null) {
+      await db.rawUpdate('''
+        UPDATE queued_snapshots 
+        SET retryCount = retryCount + 1, status = 'pending'
+        WHERE id = ?
+      ''', [id]);
+    }
   }
 }

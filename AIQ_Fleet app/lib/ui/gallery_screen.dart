@@ -5,6 +5,7 @@ import 'dart:async';
 import 'dart:io';
 import '../services/auth_service.dart';
 import '../services/database_service.dart';
+import '../services/camera_service.dart';
 
 class GalleryScreen extends StatefulWidget {
   const GalleryScreen({super.key});
@@ -17,7 +18,7 @@ class _GalleryScreenState extends State<GalleryScreen> with SingleTickerProvider
   late AnimationController _pulseController;
   Timer? _timer;
   List<Map<String, dynamic>> _snapshots = [];
-  Map<String, dynamic> _stats = {"total": 0, "No Trash Detected": 0, "Trash Detected": 0, "Not a Road": 0};
+  Map<String, dynamic> _stats = {"total": 0, "Pending Sync": 0, "No Trash Detected": 0, "Trash Detected": 0, "Not a Road": 0};
   String _selectedFolder = 'All';
   bool _isLoading = true;
 
@@ -38,7 +39,24 @@ class _GalleryScreenState extends State<GalleryScreen> with SingleTickerProvider
   Future<void> _fetchData() async {
     try {
       final flags = await DatabaseService().getLocalFlags();
+      final queued = await DatabaseService().getAllQueuedSnapshots();
       List<Map<String, dynamic>> allSnaps = [];
+
+      // Queued / Pending offline snapshots first
+      for (var q in queued) {
+        allSnaps.add({
+          'filePath': q['filePath'],
+          'display_class': 'Pending Sync',
+          'roadStatus': 'Pending Sync',
+          'confidence': 0.0,
+          'timestamp': q['timestamp'] ?? q['createdAt'] ?? 0,
+          'isQueued': true,
+          'id': q['id'],
+          'lat': q['lat'],
+          'lng': q['lng'],
+          'retryCount': q['retryCount'] ?? 0,
+        });
+      }
 
       for (var snap in flags) {
         var modifiedSnap = Map<String, dynamic>.from(snap);
@@ -61,6 +79,7 @@ class _GalleryScreenState extends State<GalleryScreen> with SingleTickerProvider
           _snapshots = allSnaps;
           _stats = {
             "total": _snapshots.length,
+            "Pending Sync": _snapshots.where((s) => s['display_class'] == 'Pending Sync').length,
             "No Trash Detected": _snapshots.where((s) => s['display_class'] == 'No Trash Detected').length,
             "Trash Detected": _snapshots.where((s) => s['display_class'] == 'Trash Detected').length,
             "Not a Road": _snapshots.where((s) => s['display_class'] == 'Not a Road').length,
@@ -86,6 +105,7 @@ class _GalleryScreenState extends State<GalleryScreen> with SingleTickerProvider
   }
 
   Color _getClassColor(String className) {
+    if (className == 'Pending Sync') return const Color(0xFFFFB300);
     if (className == 'No Trash Detected') return const Color(0xFF00E676);
     if (className == 'Trash Detected') return const Color(0xFFFF1744);
     if (className == 'Not a Road') return const Color(0xFF8A8F9D);
@@ -199,6 +219,33 @@ class _GalleryScreenState extends State<GalleryScreen> with SingleTickerProvider
           ],
         ),
         actions: [
+          Consumer<CameraService>(
+            builder: (context, cameraService, child) {
+              if (cameraService.pendingQueueCount > 0) {
+                return IconButton(
+                  tooltip: 'Sync ${cameraService.pendingQueueCount} queued images',
+                  icon: cameraService.isProcessingQueue
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amberAccent),
+                        )
+                      : const Icon(Icons.cloud_upload_rounded, color: Colors.amberAccent),
+                  onPressed: () {
+                    cameraService.processQueueSequentially();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text("Syncing ${cameraService.pendingQueueCount} queued images sequentially..."),
+                        duration: const Duration(seconds: 2),
+                        backgroundColor: const Color(0xFF1E293B),
+                      ),
+                    );
+                  },
+                );
+              }
+              return const SizedBox.shrink();
+            },
+          ),
           Container(
             margin: const EdgeInsets.only(right: 20, top: 10, bottom: 10),
             padding: const EdgeInsets.symmetric(horizontal: 15),
@@ -253,6 +300,7 @@ class _GalleryScreenState extends State<GalleryScreen> with SingleTickerProvider
                     Text("FILTERS", style: GoogleFonts.inter(color: const Color(0xFF64748B), fontSize: 12, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 12),
                     _buildFolderTab('All', Icons.folder_copy_rounded, Colors.blue),
+                    _buildFolderTab('Pending Sync', Icons.cloud_queue_rounded, const Color(0xFFFFB300)),
                     _buildFolderTab('No Trash Detected', Icons.folder_rounded, const Color(0xFF00E676)),
                     _buildFolderTab('Trash Detected', Icons.folder_special_rounded, const Color(0xFFFF1744)),
                     _buildFolderTab('Not a Road', Icons.folder_off_rounded, const Color(0xFF8A8F9D)),
@@ -262,9 +310,38 @@ class _GalleryScreenState extends State<GalleryScreen> with SingleTickerProvider
                     Text("STATISTICS", style: GoogleFonts.inter(color: const Color(0xFF64748B), fontSize: 12, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 12),
                     _buildStatCard("Total", _stats['total'] ?? 0),
+                    _buildStatCard("Pending Sync", _stats['Pending Sync'] ?? 0, const Color(0xFFFFB300)),
                     _buildStatCard("Clean", _stats['No Trash Detected'] ?? 0, const Color(0xFF00E676)),
                     _buildStatCard("Trash", _stats['Trash Detected'] ?? 0, const Color(0xFFFF1744)),
                     _buildStatCard("Other", _stats['Not a Road'] ?? 0, const Color(0xFF8A8F9D)),
+
+                    const SizedBox(height: 20),
+                    Consumer<CameraService>(
+                      builder: (context, cameraService, child) {
+                        if (cameraService.pendingQueueCount > 0) {
+                          return ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFFFB300),
+                              foregroundColor: Colors.black,
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                            icon: cameraService.isProcessingQueue
+                                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                                : const Icon(Icons.sync_rounded),
+                            label: Text(
+                              cameraService.isProcessingQueue ? "Syncing..." : "Sync Queue (${cameraService.pendingQueueCount})",
+                              style: const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            onPressed: cameraService.isProcessingQueue ? null : () {
+                              cameraService.processQueueSequentially();
+                              Navigator.pop(context);
+                            },
+                          );
+                        }
+                        return const SizedBox.shrink();
+                      },
+                    ),
                   ],
                 ),
               ),
@@ -355,8 +432,14 @@ class _GalleryScreenState extends State<GalleryScreen> with SingleTickerProvider
                               ),
                               const SizedBox(height: 6),
                               Text(
-                                "Confidence: ${confidence.toStringAsFixed(1)}%",
-                                style: GoogleFonts.inter(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                                snap['isQueued'] == true
+                                    ? "Waiting for sync (Item #${snap['id']})"
+                                    : "Confidence: ${confidence.toStringAsFixed(1)}%",
+                                style: GoogleFonts.inter(
+                                  color: snap['isQueued'] == true ? const Color(0xFFFFB300) : Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                               const SizedBox(height: 4),
                               Text(

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'database_service.dart';
+import 'camera_service.dart';
 
 class SyncService extends ChangeNotifier {
   static final SyncService _instance = SyncService._internal();
@@ -57,13 +58,17 @@ class SyncService extends ChangeNotifier {
       }
 
       // 2. Sync Video Chunks (Mock Implementation for now)
-      // Usually requires multipart form upload
       final chunks = await DatabaseService().getUnsyncedVideoChunks();
       if (chunks.isNotEmpty && _isServerOnline) {
-        // Mock success
         for (var item in chunks) {
           await DatabaseService().deleteVideoChunk(item['id']);
         }
+      }
+
+      // 3. Trigger sequential snapshot queue sync
+      final cameraService = CameraService();
+      if (cameraService.pendingQueueCount > 0 && !cameraService.isProcessingQueue) {
+        cameraService.processQueueSequentially();
       }
 
       notifyListeners();

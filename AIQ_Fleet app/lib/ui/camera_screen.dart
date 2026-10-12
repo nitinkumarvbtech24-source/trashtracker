@@ -383,6 +383,46 @@ class _CameraScreenState extends State<CameraScreen> {
                   ),
                   Row(
                     children: [
+                      if (cameraService.pendingQueueCount > 0)
+                        GestureDetector(
+                          onTap: () {
+                            cameraService.processQueueSequentially();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text("Syncing ${cameraService.pendingQueueCount} queued images sequentially..."),
+                                duration: const Duration(seconds: 2),
+                                backgroundColor: const Color(0xFF1E293B),
+                              ),
+                            );
+                          },
+                          child: Container(
+                            margin: const EdgeInsets.only(right: 8),
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.amber.withOpacity(0.2),
+                              border: Border.all(color: Colors.amberAccent, width: 1),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                cameraService.isProcessingQueue
+                                    ? const SizedBox(
+                                        width: 10,
+                                        height: 10,
+                                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.amberAccent),
+                                      )
+                                    : const Icon(Icons.cloud_upload_rounded, color: Colors.amberAccent, size: 12),
+                                const SizedBox(width: 4),
+                                Text(
+                                  "${cameraService.pendingQueueCount} queued",
+                                  style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+
                       GestureDetector(
                         onTap: () => _showSettingsModal(context, cameraService),
                         child: Container(
@@ -481,6 +521,31 @@ class _CameraScreenState extends State<CameraScreen> {
                               Builder(
                                 builder: (context) {
                                   Map<String, dynamic>? res = _lastResult ?? cameraService.latestResult;
+                                  if (res?['offline'] == true || res?['queued'] == true) {
+                                    final count = res?['pendingCount'] ?? cameraService.pendingQueueCount;
+                                    return Column(
+                                      children: [
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: [
+                                            const Icon(Icons.cloud_queue_rounded, color: Colors.amberAccent, size: 16),
+                                            const SizedBox(width: 6),
+                                            Text(
+                                              "QUEUED OFFLINE ($count PENDING)",
+                                              textAlign: TextAlign.center,
+                                              style: const TextStyle(color: Colors.amberAccent, fontSize: 13, fontWeight: FontWeight.bold),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 3),
+                                        Text(
+                                          res?['message']?.toString() ?? "Saved to device. Will auto-sync sequentially when online.",
+                                          textAlign: TextAlign.center,
+                                          style: const TextStyle(color: Colors.white70, fontSize: 11),
+                                        ),
+                                      ],
+                                    );
+                                  }
                                   String rawGarbage = (res?['garbage']?['road_status']?.toString() ?? 'UNKNOWN');
                                   String garbageStatus;
                                   if (rawGarbage == 'Clean Road') {
