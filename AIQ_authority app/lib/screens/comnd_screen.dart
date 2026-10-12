@@ -68,56 +68,71 @@ class _ComndScreenState extends State<ComndScreen> {
     }
   }
 
-  Widget _buildSummaryCard(String title, String count, IconData icon, Color color) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFFE2E8F0)),
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: color.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Icon(icon, color: color, size: 24),
+  Widget _buildSummaryCard(String title, String count, IconData icon, Color color, {bool isMobile = false}) {
+    return Container(
+      height: isMobile ? 85 : 100,
+      padding: EdgeInsets.symmetric(horizontal: isMobile ? 12 : 20, vertical: isMobile ? 10 : 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x05000000),
+            blurRadius: 4,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Container(
+            width: isMobile ? 38 : 48,
+            height: isMobile ? 38 : 48,
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(10),
             ),
-            const SizedBox(width: 16),
-            Column(
+            child: Icon(icon, color: color, size: isMobile ? 20 : 24),
+          ),
+          SizedBox(width: isMobile ? 10 : 16),
+          Expanded(
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
-                  title,
-                  style: const TextStyle(
-                    color: Color(0xFF64748B),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
+                  title.toUpperCase(),
+                  style: TextStyle(
+                    color: const Color(0xFF64748B),
+                    fontSize: isMobile ? 10 : 12,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.3,
                   ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 4),
+                SizedBox(height: isMobile ? 2 : 4),
                 Text(
                   count,
-                  style: const TextStyle(
-                    color: Color(0xFF1E293B),
-                    fontSize: 24,
+                  style: TextStyle(
+                    color: const Color(0xFF1E293B),
+                    fontSize: isMobile ? 20 : 26,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
               ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final bool isMobile = MediaQuery.of(context).size.width < 768;
     final int totalComplaints = _complaints.length;
     final int activeComplaints = _complaints.where((c) => c['status'] != 'Deflagged').length;
     final int deflaggedComplaints = _complaints.where((c) => c['status'] == 'Deflagged').length;
@@ -126,22 +141,40 @@ class _ComndScreenState extends State<ComndScreen> {
       children: [
         // Summary Cards Section
         Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Row(
-            children: [
-              _buildSummaryCard('Total Complaints', totalComplaints.toString(), LucideIcons.list, const Color(0xFF3B82F6)),
-              const SizedBox(width: 16),
-              _buildSummaryCard('Pending / Active', activeComplaints.toString(), LucideIcons.alertTriangle, const Color(0xFFF59E0B)),
-              const SizedBox(width: 16),
-              _buildSummaryCard('Deflagged / Cleaned', deflaggedComplaints.toString(), LucideIcons.checkCircle, const Color(0xFF10B981)),
-            ],
-          ),
+          padding: EdgeInsets.all(isMobile ? 12.0 : 24.0),
+          child: isMobile
+              ? Column(
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(child: _buildSummaryCard('Total Complaints', totalComplaints.toString(), LucideIcons.list, const Color(0xFF3B82F6), isMobile: true)),
+                        const SizedBox(width: 10),
+                        Expanded(child: _buildSummaryCard('Pending / Active', activeComplaints.toString(), LucideIcons.alertTriangle, const Color(0xFFF59E0B), isMobile: true)),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(child: _buildSummaryCard('Deflagged / Cleaned', deflaggedComplaints.toString(), LucideIcons.checkCircle, const Color(0xFF10B981), isMobile: true)),
+                      ],
+                    ),
+                  ],
+                )
+              : Row(
+                  children: [
+                    Expanded(child: _buildSummaryCard('Total Complaints', totalComplaints.toString(), LucideIcons.list, const Color(0xFF3B82F6))),
+                    const SizedBox(width: 16),
+                    Expanded(child: _buildSummaryCard('Pending / Active', activeComplaints.toString(), LucideIcons.alertTriangle, const Color(0xFFF59E0B))),
+                    const SizedBox(width: 16),
+                    Expanded(child: _buildSummaryCard('Deflagged / Cleaned', deflaggedComplaints.toString(), LucideIcons.checkCircle, const Color(0xFF10B981))),
+                  ],
+                ),
         ),
         
         // Map Section
         Expanded(
           child: Container(
-            margin: const EdgeInsets.only(left: 24, right: 24, bottom: 24),
+            margin: EdgeInsets.only(left: isMobile ? 12 : 24, right: isMobile ? 12 : 24, bottom: isMobile ? 12 : 24),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(16),
               border: Border.all(color: const Color(0xFFE2E8F0)),

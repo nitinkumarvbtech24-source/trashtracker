@@ -80,7 +80,7 @@ class _ComndDeflagScreenState extends State<ComndDeflagScreen> {
         final resBody = json.decode(response.body);
         final roadStatus = resBody['road_status'] ?? 'UNKNOWN';
 
-        if (roadStatus != 'Very Dirty Road' && roadStatus != 'Slightly Dirty Road') { 
+        if (roadStatus != 'Trash Detected' && roadStatus != 'Very Dirty Road' && roadStatus != 'Slightly Dirty Road') { 
           await FirebaseFirestore.instance.collection('trash_spots').doc(widget.documentId).update({
             'status': 'Deflagged',
             'deflagged_at': FieldValue.serverTimestamp(),

@@ -36,7 +36,7 @@ void main() async {
   }
   final savedUrlV4 = prefs.getString('garbage_ai_v5_url');
   if (savedUrlV4 != null && savedUrlV4.isNotEmpty) {
-    if (savedUrlV4.contains('pointer-staff-prodigy-v5')) {
+    if (savedUrlV4.contains('pointer-staff-prodigy-v5') || savedUrlV4.contains('grumbling-tattling-schilling') || savedUrlV4.contains('disprove-chop-regalia')) {
       await prefs.remove('garbage_ai_v5_url');
     } else {
       GARBAGE_AI_V5_URL = savedUrlV4;

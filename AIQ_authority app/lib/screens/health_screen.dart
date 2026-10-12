@@ -305,11 +305,12 @@ class _HealthScreenState extends State<HealthScreen> {
 
     return Scaffold(
       key: _scaffoldKey,
-      backgroundColor: Colors.transparent,
+      backgroundColor: const Color(0xFFF9FAFB),
       bottomNavigationBar: BottomNavigationBar(
-        backgroundColor: const Color(0xFF111827),
-        selectedItemColor: Colors.white,
-        unselectedItemColor: const Color(0xFF94A3B8),
+        backgroundColor: Colors.white,
+        selectedItemColor: const Color(0xFF0F5132),
+        unselectedItemColor: Colors.grey,
+        selectedLabelStyle: const TextStyle(fontWeight: FontWeight.bold),
         type: BottomNavigationBarType.fixed,
         items: const [
           BottomNavigationBarItem(icon: Icon(LucideIcons.database), label: 'Database'),
@@ -326,155 +327,136 @@ class _HealthScreenState extends State<HealthScreen> {
           }
         },
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 1. Heading
-            Row(
-              children: [
-                const Icon(LucideIcons.sparkles, color: Colors.blueAccent, size: 28),
-                const SizedBox(width: 12),
-                const Text(
-                  'Road Health Monitor',
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            
-            // 2. Desktop or Mobile Layout
-            if (isDesktop) _buildDesktopLayout() else _buildMobileLayout(),
-          ],
-        ),
+      body: Padding(
+        padding: EdgeInsets.all(isDesktop ? 24 : 12),
+        child: isDesktop ? _buildDesktopLayout() : _buildMobileLayout(),
       ),
     );
   }
 
-  Widget _buildDesktopLayout() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Top Row: Stat Cards
-        Row(
-          children: [
-            Expanded(child: _buildStatCard('Overall Health', '$_overallCleanliness%', LucideIcons.checkCircle, Colors.greenAccent)),
-            const SizedBox(width: 16),
-            Expanded(child: _buildStatCard('Spots Flagged', '$_spotsFlagged', LucideIcons.flag, Colors.redAccent)),
-            const SizedBox(width: 16),
-            Expanded(child: _buildStatCard('Spots Cleared', '$_spotsCleared', LucideIcons.checkSquare, Colors.blueAccent)),
-          ],
-        ),
-        const SizedBox(height: 24),
-        // Bottom Row: Map and Graphs
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Left: Map
-            Expanded(
-              flex: 5,
-              child: SizedBox(
-                height: 624,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(16),
-                  child: _buildMap(),
-                ),
-              ),
-            ),
-            const SizedBox(width: 24),
-            // Right: Graphs
-            Expanded(
-              flex: 3,
-              child: Column(
-                children: [
-                  _buildLineGraphCard(),
-                  const SizedBox(height: 24),
-                  _buildPieChartCard(),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
+  Widget _buildTopCards(bool isDesktop) {
+    final overallCard = _buildOverallHealthCard(!isDesktop);
+    final spotsDetectedCard = _buildHealthSpotsDetectedCard(!isDesktop);
+    final spotsClearedCard = _buildSpotsGoodCard(!isDesktop);
+    final officerResponseCard = _buildMonitoredCard(!isDesktop);
 
-  Widget _buildMobileLayout() {
-    return Column(
-      children: [
-        Row(
-          children: [
-            Expanded(child: _buildStatCard('Cleanliness', '$_overallCleanliness%', LucideIcons.checkCircle, Colors.greenAccent)),
-            const SizedBox(width: 12),
-            Expanded(child: _buildStatCard('Flagged', '$_spotsFlagged', LucideIcons.flag, Colors.redAccent)),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(child: _buildStatCard('Cleared', '$_spotsCleared', LucideIcons.checkSquare, Colors.blueAccent)),
-          ],
-        ),
-        const SizedBox(height: 24),
-        SizedBox(
-          height: 400,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: _buildMap(),
+    if (isDesktop) {
+      return Row(
+        children: [
+          Expanded(child: overallCard),
+          const SizedBox(width: 16),
+          Expanded(child: spotsDetectedCard),
+          const SizedBox(width: 16),
+          Expanded(child: spotsClearedCard),
+          const SizedBox(width: 16),
+          Expanded(child: officerResponseCard),
+        ],
+      );
+    } else {
+      return Column(
+        children: [
+          Row(
+            children: [
+              Expanded(child: overallCard),
+              const SizedBox(width: 10),
+              Expanded(child: spotsDetectedCard),
+            ],
           ),
-        ),
-        const SizedBox(height: 24),
-        _buildLineGraphCard(),
-        const SizedBox(height: 24),
-        _buildPieChartCard(),
-      ],
-    );
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(child: spotsClearedCard),
+              const SizedBox(width: 10),
+              Expanded(child: officerResponseCard),
+            ],
+          ),
+        ],
+      );
+    }
   }
 
-  Widget _buildStatCard(String title, String value, IconData icon, Color color) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF111827),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF1E293B)),
-      ),
+  Widget _buildOverallHealthCard(bool isMobile) {
+    return _buildBaseCard(
+      isMobile: isMobile,
       child: Row(
         children: [
           Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(icon, color: color, size: 24),
+            width: isMobile ? 36 : 48,
+            height: isMobile ? 36 : 48,
+            decoration: BoxDecoration(color: Colors.green.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+            child: Icon(Icons.favorite_rounded, color: Colors.green, size: isMobile ? 20 : 28),
           ),
-          const SizedBox(width: 12),
+          SizedBox(width: isMobile ? 10 : 16),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: Color(0xFF94A3B8),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+                Text('OVERALL HEALTH', style: TextStyle(color: Colors.black54, fontSize: isMobile ? 9 : 11, fontWeight: FontWeight.bold, letterSpacing: 0.3), maxLines: 1, overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 4),
-                Text(
-                  value,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                  ),
+                Text('$_overallCleanliness%', style: TextStyle(color: Colors.black87, fontSize: isMobile ? 20 : 32, fontWeight: FontWeight.bold)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHealthSpotsDetectedCard(bool isMobile) {
+    return _buildBaseCard(
+      isMobile: isMobile,
+      child: Row(
+        children: [
+          Container(
+            width: isMobile ? 36 : 48,
+            height: isMobile ? 36 : 48,
+            decoration: BoxDecoration(color: Colors.red.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+            child: Icon(Icons.warning_amber_rounded, color: Colors.redAccent, size: isMobile ? 20 : 28),
+          ),
+          SizedBox(width: isMobile ? 10 : 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text('POTHOLES / BAD', style: TextStyle(color: Colors.black54, fontSize: isMobile ? 9 : 11, fontWeight: FontWeight.bold, letterSpacing: 0.3), maxLines: 1, overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 4),
+                Text('$_spotsFlagged', style: TextStyle(color: Colors.black87, fontSize: isMobile ? 20 : 32, fontWeight: FontWeight.bold)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSpotsGoodCard(bool isMobile) {
+    return _buildBaseCard(
+      isMobile: isMobile,
+      child: Row(
+        children: [
+          Container(
+            width: isMobile ? 36 : 48,
+            height: isMobile ? 36 : 48,
+            decoration: BoxDecoration(color: Colors.blue.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+            child: Icon(Icons.check_circle_outline, color: Colors.blueAccent, size: isMobile ? 20 : 28),
+          ),
+          SizedBox(width: isMobile ? 10 : 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text('GOOD ROADS', style: TextStyle(color: Colors.black54, fontSize: isMobile ? 9 : 11, fontWeight: FontWeight.bold, letterSpacing: 0.3), maxLines: 1, overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 4),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.baseline,
+                  textBaseline: TextBaseline.alphabetic,
+                  children: [
+                    Text('$_spotsCleared', style: TextStyle(color: Colors.blueAccent, fontSize: isMobile ? 20 : 32, fontWeight: FontWeight.bold)),
+                    Text(' / $_totalSpots', style: TextStyle(color: Colors.black54, fontSize: isMobile ? 13 : 20, fontWeight: FontWeight.bold)),
+                  ],
                 ),
               ],
             ),
@@ -484,73 +466,228 @@ class _HealthScreenState extends State<HealthScreen> {
     );
   }
 
+  Widget _buildMonitoredCard(bool isMobile) {
+    int total = _totalSpots == 0 ? 120 : _totalSpots;
+    return _buildBaseCard(
+      isMobile: isMobile,
+      child: Row(
+        children: [
+          Container(
+            width: isMobile ? 36 : 48,
+            height: isMobile ? 36 : 48,
+            decoration: BoxDecoration(color: const Color(0xFFF3E8FF), borderRadius: BorderRadius.circular(10)),
+            child: Icon(LucideIcons.activity, color: Colors.purpleAccent, size: isMobile ? 20 : 28),
+          ),
+          SizedBox(width: isMobile ? 10 : 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text('ROAD SEGMENTS', style: TextStyle(color: Colors.black54, fontSize: isMobile ? 9 : 11, fontWeight: FontWeight.bold, letterSpacing: 0.3), maxLines: 1, overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 4),
+                Text('$total', style: TextStyle(color: Colors.black87, fontSize: isMobile ? 20 : 32, fontWeight: FontWeight.bold)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBaseCard({required Widget child, bool isMobile = false}) {
+    return Container(
+      height: isMobile ? 85 : 120,
+      padding: EdgeInsets.symmetric(horizontal: isMobile ? 10 : 24, vertical: isMobile ? 10 : 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 10, offset: const Offset(0, 4)),
+        ],
+      ),
+      child: child,
+    );
+  }
+
+  Widget _buildDesktopLayout() {
+    return Column(
+      children: [
+        _buildTopCards(true),
+        const SizedBox(height: 24),
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                flex: 5,
+                child: _buildMapWrapper(),
+              ),
+              const SizedBox(width: 24),
+              Expanded(
+                flex: 3,
+                child: Column(
+                  children: [
+                    Expanded(child: _buildLineGraphCard()),
+                    const SizedBox(height: 24),
+                    Expanded(child: _buildPieChartCard()),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMobileLayout() {
+    return ListView(
+      children: [
+        _buildTopCards(false),
+        const SizedBox(height: 24),
+        SizedBox(
+          height: 400,
+          child: _buildMapWrapper(),
+        ),
+        const SizedBox(height: 24),
+        _buildLineGraphCard(),
+        const SizedBox(height: 24),
+        _buildPieChartCard(),
+      ],
+    );
+  }
+
+  Widget _buildMapWrapper() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 10, offset: const Offset(0, 4)),
+        ],
+      ),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Live Road Health Map', style: TextStyle(color: Colors.black87, fontWeight: FontWeight.bold, fontSize: 16)),
+                Row(
+                  children: [
+                    _buildMapLegendItem(Colors.green, 'Good Road'),
+                    const SizedBox(width: 16),
+                    _buildMapLegendItem(Colors.orange, 'Slightly Bad'),
+                    const SizedBox(width: 16),
+                    _buildMapLegendItem(Colors.redAccent, 'Pothole'),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: ClipRRect(
+              borderRadius: const BorderRadius.only(bottomLeft: Radius.circular(12), bottomRight: Radius.circular(12)),
+              child: _buildMap(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMapLegendItem(Color color, String label) {
+    return Row(
+      children: [
+        Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+        const SizedBox(width: 6),
+        Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.black87)),
+      ],
+    );
+  }
+
   Widget _buildPieChartCard() {
     double total = _healthFlags.isEmpty ? 1 : _healthFlags.length.toDouble();
     double cleanVal = _healthFlags.where((f) => f.className == 'Good_Condition' || f.displayClass == 'Good Condition').length.toDouble();
-    double slightVal = _healthFlags.where((f) => f.className == 'Slightly_Dirty').length.toDouble();
+    double slightVal = _healthFlags.where((f) => f.className == 'Slightly_Dirty' || f.className == 'Bad_Road' || f.displayClass == 'Bad Road').length.toDouble();
     double dirtyVal = _healthFlags.where((f) => f.className == 'Pothole_Detected' || f.displayClass == 'Pothole Detected').length.toDouble();
 
-    // Avoid all 0 values for PieChart
     if (cleanVal == 0 && slightVal == 0 && dirtyVal == 0) {
       cleanVal = 1; 
       total = 1;
     }
 
     return Container(
-      height: 300,
-      padding: const EdgeInsets.all(16),
+      height: 320,
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: const Color(0xFF111827),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF1E293B)),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 10, offset: const Offset(0, 4)),
+        ],
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          const Text('Road Health Distribution', style: TextStyle(color: Colors.black87, fontWeight: FontWeight.bold, fontSize: 16)),
+          const SizedBox(height: 16),
           Expanded(
-            child: PieChart(
-              PieChartData(
-                sectionsSpace: 2,
-                centerSpaceRadius: 30,
-                sections: [
-                  if (cleanVal > 0)
-                    PieChartSectionData(
-                      color: Colors.green,
-                      value: cleanVal,
-                      title: '${((cleanVal / total) * 100).toInt()}%',
-                      radius: 40,
-                      titleStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
+            child: Row(
+              children: [
+                Expanded(
+                  child: PieChart(
+                    PieChartData(
+                      sectionsSpace: 2,
+                      centerSpaceRadius: 30,
+                      sections: [
+                        if (cleanVal > 0)
+                          PieChartSectionData(
+                            color: Colors.green,
+                            value: cleanVal,
+                            title: '${((cleanVal / total) * 100).toInt()}%',
+                            radius: 40,
+                            titleStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
+                          ),
+                        if (slightVal > 0)
+                          PieChartSectionData(
+                            color: Colors.orange,
+                            value: slightVal,
+                            title: '${((slightVal / total) * 100).toInt()}%',
+                            radius: 40,
+                            titleStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
+                          ),
+                        if (dirtyVal > 0)
+                          PieChartSectionData(
+                            color: Colors.redAccent,
+                            value: dirtyVal,
+                            title: '${((dirtyVal / total) * 100).toInt()}%',
+                            radius: 40,
+                            titleStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
+                          ),
+                      ],
                     ),
-                  if (slightVal > 0)
-                    PieChartSectionData(
-                      color: Colors.orange,
-                      value: slightVal,
-                      title: '${((slightVal / total) * 100).toInt()}%',
-                      radius: 40,
-                      titleStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
-                    ),
-                  if (dirtyVal > 0)
-                    PieChartSectionData(
-                      color: Colors.red,
-                      value: dirtyVal,
-                      title: '${((dirtyVal / total) * 100).toInt()}%',
-                      radius: 40,
-                      titleStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
-                    ),
-                ],
-              ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildLegendItem(Colors.green, 'Good Road (${cleanVal.toInt()})'),
+                    const SizedBox(height: 8),
+                    _buildLegendItem(Colors.orange, 'Slightly Bad (${slightVal.toInt()})'),
+                    const SizedBox(height: 8),
+                    _buildLegendItem(Colors.redAccent, 'Pothole (${dirtyVal.toInt()})'),
+                  ],
+                ),
+              ],
             ),
-          ),
-          const SizedBox(width: 16),
-          Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildLegendItem(Colors.green, 'Clean (${cleanVal.toInt()})'),
-              const SizedBox(height: 8),
-              _buildLegendItem(Colors.orange, 'Slightly Dirty (${slightVal.toInt()})'),
-              const SizedBox(height: 8),
-              _buildLegendItem(Colors.red, 'Very Dirty (${dirtyVal.toInt()})'),
-            ],
           ),
         ],
       ),
@@ -561,61 +698,68 @@ class _HealthScreenState extends State<HealthScreen> {
     return Row(
       children: [
         Container(
-          width: 12,
-          height: 12,
+          width: 10,
+          height: 10,
           decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
         const SizedBox(width: 8),
-        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+        Text(label, style: const TextStyle(color: Colors.black87, fontSize: 12, fontWeight: FontWeight.w500)),
       ],
     );
   }
 
   Widget _buildLineGraphCard() {
     return Container(
-      height: 300,
-      padding: const EdgeInsets.all(24),
+      height: 320,
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: const Color(0xFF111827),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF1E293B)),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 10, offset: const Offset(0, 4)),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'Cleanliness Trend Over Time',
+            'Health Trend Over Time',
             style: TextStyle(
-              color: Colors.white,
-              fontSize: 18,
+              color: Colors.black87,
+              fontSize: 16,
               fontWeight: FontWeight.bold,
             ),
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 16),
           Expanded(
             child: LineChart(
               LineChartData(
-                gridData: const FlGridData(show: false),
+                gridData: FlGridData(
+                  show: true,
+                  drawVerticalLine: false,
+                  getDrawingHorizontalLine: (value) => FlLine(color: Colors.grey.shade200, strokeWidth: 1),
+                ),
                 titlesData: FlTitlesData(
                   leftTitles: AxisTitles(
                     sideTitles: SideTitles(
                       showTitles: true,
-                      reservedSize: 40,
+                      reservedSize: 36,
                       getTitlesWidget: (value, meta) {
-                        return Text('${value.toInt()}%', style: const TextStyle(color: Colors.white54, fontSize: 10));
+                        return Text('${value.toInt()}%', style: TextStyle(color: Colors.grey.shade600, fontSize: 10));
                       },
                     ),
                   ),
                   bottomTitles: AxisTitles(
                     sideTitles: SideTitles(
                       showTitles: true,
-                      reservedSize: 30,
+                      reservedSize: 26,
                       getTitlesWidget: (value, meta) {
                         const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
                         if (value.toInt() >= 0 && value.toInt() < days.length) {
                           return Padding(
-                            padding: const EdgeInsets.only(top: 8.0),
-                            child: Text(days[value.toInt()], style: const TextStyle(color: Colors.white54, fontSize: 10)),
+                            padding: const EdgeInsets.only(top: 6.0),
+                            child: Text(days[value.toInt()], style: TextStyle(color: Colors.grey.shade600, fontSize: 10)),
                           );
                         }
                         return const Text('');
@@ -642,13 +786,13 @@ class _HealthScreenState extends State<HealthScreen> {
                       FlSpot(6, 85),
                     ],
                     isCurved: true,
-                    color: Colors.blueAccent,
-                    barWidth: 4,
+                    color: const Color(0xFF0F5132),
+                    barWidth: 3,
                     isStrokeCapRound: true,
                     dotData: const FlDotData(show: false),
                     belowBarData: BarAreaData(
                       show: true,
-                      color: Colors.blueAccent.withOpacity(0.2),
+                      color: const Color(0xFF0F5132).withOpacity(0.08),
                     ),
                   ),
                 ],

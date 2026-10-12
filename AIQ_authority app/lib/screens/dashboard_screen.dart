@@ -141,7 +141,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             final data = doc.data();
             final status = data['status'] ?? 'Flagged';
             final roadStatus = data['road_status'] ?? '';
-            return status != 'Resolved' && (roadStatus == 'Very Dirty Road' || roadStatus == 'Slightly Dirty Road');
+            return status != 'Resolved' && (roadStatus == 'Trash Detected' || roadStatus == 'Very Dirty Road' || roadStatus == 'Slightly Dirty Road');
           }).map((doc) {
             final data = doc.data();
             data['id'] = doc.id;
@@ -431,10 +431,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
     }
 
+    final isMobile = MediaQuery.of(context).size.width < 768;
+
     return Scaffold(
       backgroundColor: Colors.transparent, // Background handled by parent Row
       body: Padding(
-        padding: const EdgeInsets.all(24),
+        padding: EdgeInsets.all(isMobile ? 12 : 24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -442,8 +444,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
             const SizedBox(height: 16),
             Expanded(
               child: _bottomNavIndex == 0 
-                  ? _buildHomepageContent() 
-                  : _buildRegisteredFleetContent(),
+                  ? _buildHomepageContent(isMobile) 
+                  : _buildRegisteredFleetContent(isMobile),
             ),
           ],
         ),
@@ -463,11 +465,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildHomepageContent() {
+  Widget _buildHomepageContent(bool isMobile) {
+    if (isMobile) {
+      return ListView(
+        children: [
+          _buildKpiGrid(true),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 300,
+            child: _buildMapCard(),
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 380,
+            child: _buildRegisteredVehiclesTable(),
+          ),
+          const SizedBox(height: 16),
+          _buildCleanlinessChartCard(isMobile: true),
+          const SizedBox(height: 16),
+          _buildHealthChartCard(isMobile: true),
+          const SizedBox(height: 24),
+        ],
+      );
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildKpiGrid(),
+        _buildKpiGrid(false),
         const SizedBox(height: 16),
         Expanded(
           flex: 5,
@@ -502,7 +527,130 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildRegisteredFleetContent() {
+  Widget _buildRegisteredFleetContent([bool isMobile = false]) {
+    if (isMobile) {
+      return ListView(
+        children: [
+          // Mobile vehicle selector card
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey.shade200),
+              boxShadow: [
+                BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 8, offset: const Offset(0, 2)),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Select Vehicle (${_filteredVehicles.length})', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.black87)),
+                    if (_selectedFleetVehicle != null)
+                      Text(_selectedFleetVehicle!.vehicleNumber, style: const TextStyle(color: Color(0xFF006341), fontWeight: FontWeight.bold, fontSize: 13)),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  height: 48,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: _filteredVehicles.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 8),
+                    itemBuilder: (context, index) {
+                      final v = _filteredVehicles[index];
+                      final isSelected = _selectedFleetVehicle?.id == v.id;
+                      return GestureDetector(
+                        onTap: () => setState(() => _selectedFleetVehicle = v),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: isSelected ? const Color(0xFFE8F5E9) : const Color(0xFFF8FAFC),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: isSelected ? const Color(0xFF006341) : Colors.grey.shade300, width: isSelected ? 1.5 : 1),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(LucideIcons.truck, size: 16, color: isSelected ? const Color(0xFF006341) : Colors.grey),
+                              const SizedBox(width: 6),
+                              Text(v.vehicleNumber.isNotEmpty ? v.vehicleNumber : v.id, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: isSelected ? const Color(0xFF006341) : Colors.black87)),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          if (_selectedFleetVehicle != null) ...[
+            _buildVehicleHeader(_selectedFleetVehicle!, true),
+            const SizedBox(height: 14),
+            _buildFleetKpis(_selectedFleetVehicle!, true),
+            const SizedBox(height: 14),
+            SizedBox(
+              height: 300,
+              child: _buildFleetMiddleSection(_selectedFleetVehicle!),
+            ),
+            const SizedBox(height: 14),
+            Column(
+              children: [
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () {},
+                    icon: const Icon(LucideIcons.database, color: Colors.white, size: 18),
+                    label: const Text('Database', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF006341),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () {},
+                        icon: const Icon(LucideIcons.map, color: Color(0xFF006341), size: 16),
+                        label: const Text('Trip Details', style: TextStyle(color: Color(0xFF006341), fontSize: 13, fontWeight: FontWeight.bold)),
+                        style: OutlinedButton.styleFrom(
+                          side: const BorderSide(color: Color(0xFF006341)),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () {},
+                        icon: const Icon(LucideIcons.barChart2, color: Color(0xFF006341), size: 16),
+                        label: const Text('Analytics', style: TextStyle(color: Color(0xFF006341), fontSize: 13, fontWeight: FontWeight.bold)),
+                        style: OutlinedButton.styleFrom(
+                          side: const BorderSide(color: Color(0xFF006341)),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+          ],
+        ],
+      );
+    }
+
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -687,18 +835,52 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildFleetKpis(Vehicle vehicle) {
+  Widget _buildFleetKpis(Vehicle vehicle, [bool isMobile = false]) {
+    final c1 = _buildNewKpiCard('KM\'s Traveled', '32.4', 'km', LucideIcons.mapPin, Colors.teal, '8%', isPositive: true, isMobile: isMobile);
+    final c2 = _buildNewKpiCard('Potholes', '18', '', Icons.warning_rounded, Colors.orange, '12%', isPositive: true, isMobile: isMobile);
+    final c3 = _buildNewKpiCard('Road Litter', '24', '', LucideIcons.trash2, Colors.teal, '20%', isPositive: true, isMobile: isMobile);
+    final c4 = _buildNewKpiCard('Anomalies', '2', '', Icons.report_problem, Colors.red, '5%', isPositive: false, isMobile: isMobile);
+    final c5 = _buildNewKpiCard('Active Time', '5h 42m', '', LucideIcons.clock, Colors.teal, '10%', isPositive: true, isMobile: isMobile);
+
+    if (isMobile) {
+      return Column(
+        children: [
+          Row(
+            children: [
+              Expanded(child: c1),
+              const SizedBox(width: 8),
+              Expanded(child: c2),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(child: c3),
+              const SizedBox(width: 8),
+              Expanded(child: c4),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(child: c5),
+            ],
+          ),
+        ],
+      );
+    }
+
     return Row(
       children: [
-        Expanded(child: _buildNewKpiCard('KM\'s Traveled', '32.4', 'km', LucideIcons.mapPin, Colors.teal, '8%', isPositive: true)),
+        Expanded(child: c1),
         const SizedBox(width: 16),
-        Expanded(child: _buildNewKpiCard('Potholes Detected', '18', '', Icons.warning_rounded, Colors.orange, '12%', isPositive: true)),
+        Expanded(child: c2),
         const SizedBox(width: 16),
-        Expanded(child: _buildNewKpiCard('Road Litter Spots', '24', '', LucideIcons.trash2, Colors.teal, '20%', isPositive: true)),
+        Expanded(child: c3),
         const SizedBox(width: 16),
-        Expanded(child: _buildNewKpiCard('Vehicle Anomalies', '2', '', Icons.report_problem, Colors.red, '5%', isPositive: false)),
+        Expanded(child: c4),
         const SizedBox(width: 16),
-        Expanded(child: _buildNewKpiCard('Active Time', '5h 42m', '', LucideIcons.clock, Colors.teal, '10%', isPositive: true)),
+        Expanded(child: c5),
       ],
     );
   }
@@ -781,7 +963,101 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
 
-  Widget _buildVehicleHeader(Vehicle vehicle) {
+  Widget _buildVehicleHeader(Vehicle vehicle, [bool isMobile = false]) {
+    final buttons = Row(
+      children: [
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: () {},
+            icon: const Icon(Icons.phone, color: Color(0xFF006341), size: 16),
+            label: const Text('Call Driver', style: TextStyle(color: Color(0xFF006341), fontSize: 12)),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              side: BorderSide(color: Colors.grey.shade300),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: () {},
+            icon: const Icon(Icons.headset_mic, color: Color(0xFF006341), size: 16),
+            label: const Text('Call Authority', style: TextStyle(color: Color(0xFF006341), fontSize: 12)),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              side: BorderSide(color: Colors.grey.shade300),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+          ),
+        ),
+      ],
+    );
+
+    if (isMobile) {
+      return Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.grey.shade200),
+          boxShadow: [
+            BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 8, offset: const Offset(0, 2)),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: const BoxDecoration(color: Color(0xFFE8F5E9), shape: BoxShape.circle),
+                  child: const Icon(LucideIcons.truck, size: 22, color: Color(0xFF006341)),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              vehicle.vehicleNumber.isNotEmpty ? vehicle.vehicleNumber : vehicle.id,
+                              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(color: Colors.white, border: Border.all(color: Colors.green), borderRadius: BorderRadius.circular(4)),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(width: 5, height: 5, decoration: const BoxDecoration(color: Colors.green, shape: BoxShape.circle)),
+                                const SizedBox(width: 4),
+                                const Text('Moving', style: TextStyle(color: Colors.green, fontSize: 9, fontWeight: FontWeight.bold)),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text('Driver: ${vehicle.driverName.isNotEmpty ? vehicle.driverName : 'Unassigned'}', style: TextStyle(color: Colors.grey.shade600, fontSize: 11)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            buttons,
+          ],
+        ),
+      );
+    }
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -794,7 +1070,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         children: [
           Container(
             padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(color: const Color(0xFFE8F5E9), shape: BoxShape.circle),
+            decoration: const BoxDecoration(color: Color(0xFFE8F5E9), shape: BoxShape.circle),
             child: const Icon(LucideIcons.truck, size: 32, color: Color(0xFF006341)),
           ),
           const SizedBox(width: 20),
@@ -824,11 +1100,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   children: [
                     Text('Driver: ${vehicle.driverName.isNotEmpty ? vehicle.driverName : 'Unassigned'}', style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
                     const SizedBox(width: 16),
-                    Text('|   Vehicle Type: Compactor', style: TextStyle(color: Colors.grey.shade600, fontSize: 12)), // Mock
+                    Text('|   Vehicle Type: Compactor', style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
                     const SizedBox(width: 16),
-                    Text('|   Fuel Type: Diesel', style: TextStyle(color: Colors.grey.shade600, fontSize: 12)), // Mock
+                    Text('|   Fuel Type: Diesel', style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
                     const SizedBox(width: 16),
-                    Text('|   Model: Tata 1613', style: TextStyle(color: Colors.grey.shade600, fontSize: 12)), // Mock
+                    Text('|   Model: Tata 1613', style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
                   ],
                 ),
               ],
@@ -1067,81 +1343,116 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildKpiGrid() {
+  Widget _buildKpiGrid([bool isMobile = false]) {
+    final card1 = _buildNewKpiCard('Total Fleet', '${_filteredVehicles.length}', 'Vehicles', LucideIcons.truck, const Color(0xFF198754), '+ 12%', isMobile: isMobile);
+    final card2 = InkWell(
+      onTap: () {
+        Navigator.push(context, MaterialPageRoute(builder: (context) => const GarbageSpotsScreen()));
+      },
+      child: _buildNewKpiCard('Garbage Spots', '342', 'Spots', LucideIcons.trash, const Color(0xFF198754), '+ 18%', isMobile: isMobile),
+    );
+    final card3 = _buildNewKpiCard('Potholes', '215', 'Potholes', LucideIcons.alertTriangle, const Color(0xFFFFC107), '+ 15%', isMobile: isMobile);
+    final card4 = _buildNewKpiCard('Vehicle Anomalies', '18', 'Detected', LucideIcons.alertOctagon, const Color(0xFFDC3545), '- 5%', isPositive: false, isMobile: isMobile);
+    final card5 = _buildNewKpiCard('Total KMs', '3,254', 'KMs', LucideIcons.mapPin, const Color(0xFF198754), '+ 10%', isMobile: isMobile);
+    final card6 = _buildNewKpiCard('Active Time', '128h 42m', 'Hours', LucideIcons.clock, const Color(0xFF198754), '+ 8%', isMobile: isMobile);
+
+    if (isMobile) {
+      return Column(
+        children: [
+          Row(children: [Expanded(child: card1), const SizedBox(width: 10), Expanded(child: card2)]),
+          const SizedBox(height: 10),
+          Row(children: [Expanded(child: card3), const SizedBox(width: 10), Expanded(child: card4)]),
+          const SizedBox(height: 10),
+          Row(children: [Expanded(child: card5), const SizedBox(width: 10), Expanded(child: card6)]),
+        ],
+      );
+    }
+
     return Row(
       children: [
-        Expanded(child: _buildNewKpiCard('Total Fleet', '${_filteredVehicles.length}', 'Vehicles', LucideIcons.truck, const Color(0xFF198754), '+ 12%')),
+        Expanded(child: card1),
         const SizedBox(width: 16),
-        Expanded(
-          child: InkWell(
-            onTap: () {
-              Navigator.push(context, MaterialPageRoute(builder: (context) => const GarbageSpotsScreen()));
-            },
-            child: _buildNewKpiCard('Garbage Spots Identified', '342', 'Spots', LucideIcons.trash, const Color(0xFF198754), '+ 18%'),
-          ),
-        ),
+        Expanded(child: card2),
         const SizedBox(width: 16),
-        Expanded(child: _buildNewKpiCard('Potholes Identified', '215', 'Potholes', LucideIcons.alertTriangle, const Color(0xFFFFC107), '+ 15%')),
+        Expanded(child: card3),
         const SizedBox(width: 16),
-        Expanded(child: _buildNewKpiCard('Vehicle Anomalies', '18', 'Detected', LucideIcons.alertOctagon, const Color(0xFFDC3545), '- 5%', isPositive: false)),
+        Expanded(child: card4),
         const SizedBox(width: 16),
-        Expanded(child: _buildNewKpiCard('Total KMs Traveled', '3,254', 'KMs', LucideIcons.mapPin, const Color(0xFF198754), '+ 10%')),
+        Expanded(child: card5),
         const SizedBox(width: 16),
-        Expanded(child: _buildNewKpiCard('Total Active Time', '128h 42m', 'Hours', LucideIcons.clock, const Color(0xFF198754), '+ 8%')),
+        Expanded(child: card6),
       ],
     );
   }
 
-  Widget _buildNewKpiCard(String title, String value, String unit, IconData icon, Color iconColor, String trend, {bool isPositive = true}) {
+  Widget _buildNewKpiCard(String title, String value, String unit, IconData icon, Color iconColor, String trend, {bool isPositive = true, bool isMobile = false}) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      height: isMobile ? 85 : 110,
+      padding: EdgeInsets.symmetric(horizontal: isMobile ? 10 : 16, vertical: isMobile ? 10 : 14),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))],
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 10, offset: const Offset(0, 4)),
+        ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: iconColor.withOpacity(0.1),
-                  shape: BoxShape.circle,
+          Container(
+            width: isMobile ? 36 : 46,
+            height: isMobile ? 36 : 46,
+            decoration: BoxDecoration(
+              color: iconColor.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: iconColor, size: isMobile ? 18 : 24),
+          ),
+          SizedBox(width: isMobile ? 10 : 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  title.toUpperCase(),
+                  style: TextStyle(
+                    fontSize: isMobile ? 9 : 11,
+                    color: Colors.black54,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.3,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                child: Icon(icon, color: iconColor, size: 24),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                const SizedBox(height: 3),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.baseline,
+                  textBaseline: TextBaseline.alphabetic,
                   children: [
-                    Text(title, style: const TextStyle(fontSize: 10, color: Color(0xFF64748B), fontWeight: FontWeight.bold), maxLines: 2),
-                    const SizedBox(height: 4),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Text(value, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
-                        const SizedBox(width: 4),
-                        const Icon(Icons.keyboard_arrow_right, size: 16, color: Color(0xFF64748B)),
-                      ],
+                    Text(
+                      value,
+                      style: TextStyle(
+                        fontSize: isMobile ? 18 : 24,
+                        fontWeight: FontWeight.bold,
+                        color: const Color(0xFF1E293B),
+                      ),
                     ),
-                    Text(unit, style: const TextStyle(fontSize: 10, color: Color(0xFF64748B))),
+                    const SizedBox(width: 6),
+                    Text(
+                      trend,
+                      style: TextStyle(
+                        fontSize: isMobile ? 8 : 10,
+                        fontWeight: FontWeight.bold,
+                        color: isPositive ? const Color(0xFF198754) : const Color(0xFFDC3545),
+                      ),
+                    ),
                   ],
                 ),
-              )
-            ],
+              ],
+            ),
           ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Icon(isPositive ? Icons.arrow_upward : Icons.arrow_downward, size: 12, color: isPositive ? const Color(0xFF198754) : const Color(0xFFDC3545)),
-              const SizedBox(width: 4),
-              Expanded(child: Text('$trend from last week', style: TextStyle(fontSize: 10, color: isPositive ? const Color(0xFF198754) : const Color(0xFFDC3545)), overflow: TextOverflow.ellipsis)),
-            ],
-          )
         ],
       ),
     );
@@ -1176,7 +1487,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         final status = list[i + 1]['road_status'];
         
         Color segmentColor = Colors.greenAccent;
-        if (status == 'Very Dirty Road') segmentColor = Colors.redAccent;
+        if (status == 'Very Dirty Road' || status == 'Trash Detected') segmentColor = Colors.redAccent;
         else if (status == 'Slightly Dirty Road') segmentColor = Colors.yellowAccent;
         
         routePolylines.add(Polyline(
@@ -1214,7 +1525,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
       // Only show flags for dirty or cleared spots (no clutter for Clean spots)
       if (status != 'Clean Road' && status != 'Clean') {
-        Color markerColor = isCleared ? Colors.grey : (status == 'Very Dirty Road' ? Colors.redAccent : Colors.orangeAccent);
+        Color markerColor = isCleared ? Colors.grey : ((status == 'Very Dirty Road' || status == 'Trash Detected') ? Colors.redAccent : Colors.orangeAccent);
         
         customTrashMarkers.add(Marker(
           point: LatLng(lat, lng),
@@ -1681,7 +1992,110 @@ class _DashboardScreenState extends State<DashboardScreen> {
     ]);
   }
 
-  Widget _buildCleanlinessChartCard() {
+  Widget _buildCleanlinessChartCard({bool isMobile = false}) {
+    final donut = SizedBox(
+      width: isMobile ? 110 : 150,
+      height: isMobile ? 110 : 150,
+      child: Stack(
+        children: [
+          PieChart(
+            PieChartData(
+              sectionsSpace: 0,
+              centerSpaceRadius: isMobile ? 35 : 50,
+              sections: [
+                PieChartSectionData(color: const Color(0xFF198754), value: 40, showTitle: false, radius: isMobile ? 16 : 20),
+                PieChartSectionData(color: const Color(0xFFFFC107), value: 35, showTitle: false, radius: isMobile ? 16 : 20),
+                PieChartSectionData(color: const Color(0xFFDC3545), value: 25, showTitle: false, radius: isMobile ? 16 : 20),
+              ],
+            ),
+          ),
+          Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text('342', style: TextStyle(fontSize: isMobile ? 18 : 24, fontWeight: FontWeight.bold)),
+                Text('Total Spots', style: TextStyle(fontSize: isMobile ? 9 : 10, color: const Color(0xFF64748B))),
+              ],
+            ),
+          )
+        ],
+      ),
+    );
+
+    final legend = Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        _buildChartLegendItem('Clean Roads', '40%', '(137)', const Color(0xFF198754)),
+        const SizedBox(height: 10),
+        _buildChartLegendItem('Slightly Dirty', '35%', '(120)', const Color(0xFFFFC107)),
+        const SizedBox(height: 10),
+        _buildChartLegendItem('Very Dirty', '25%', '(85)', const Color(0xFFDC3545)),
+      ],
+    );
+
+    final lineChartWidget = SizedBox(
+      height: isMobile ? 110 : 150,
+      child: LineChart(
+        LineChartData(
+          gridData: FlGridData(show: true, drawVerticalLine: false, getDrawingHorizontalLine: (value) => FlLine(color: const Color(0xFFE2E8F0), strokeWidth: 1, dashArray: [4, 4])),
+          titlesData: FlTitlesData(
+            rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 22, getTitlesWidget: (value, meta) {
+              const dates = ['8 May', '9 May', '10 May', '11 May', '12 May', '13 May', '14 May'];
+              if (value.toInt() >= 0 && value.toInt() < dates.length) {
+                return Text(dates[value.toInt()], style: const TextStyle(fontSize: 9, color: Color(0xFF64748B)));
+              }
+              return const Text('');
+            })),
+            leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 28, getTitlesWidget: (value, meta) {
+              return Text(value.toInt().toString(), style: const TextStyle(fontSize: 10, color: Color(0xFF64748B)));
+            })),
+          ),
+          borderData: FlBorderData(show: false),
+          minX: 0, maxX: 6, minY: 0, maxY: 400,
+          lineBarsData: [
+            LineChartBarData(
+              spots: const [FlSpot(0, 80), FlSpot(1, 120), FlSpot(2, 90), FlSpot(3, 180), FlSpot(4, 230), FlSpot(5, 180), FlSpot(6, 280)],
+              isCurved: true,
+              color: const Color(0xFF198754),
+              barWidth: 2,
+              isStrokeCapRound: true,
+              dotData: FlDotData(show: true, getDotPainter: (spot, percent, barData, index) => FlDotCirclePainter(radius: 4, color: const Color(0xFF198754), strokeWidth: 2, strokeColor: Colors.white)),
+              belowBarData: BarAreaData(show: false),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (isMobile) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Road Cleanliness Monitor (Last 7 Days)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFF1E293B))),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                donut,
+                const SizedBox(width: 14),
+                Expanded(child: legend),
+              ],
+            ),
+            const SizedBox(height: 14),
+            lineChartWidget,
+          ],
+        ),
+      );
+    }
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -1698,94 +2112,123 @@ class _DashboardScreenState extends State<DashboardScreen> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                SizedBox(
-                width: 150,
-                height: 150,
-                child: Stack(
-                  children: [
-                    PieChart(
-                      PieChartData(
-                        sectionsSpace: 0,
-                        centerSpaceRadius: 50,
-                        sections: [
-                          PieChartSectionData(color: const Color(0xFF198754), value: 40, showTitle: false, radius: 20),
-                          PieChartSectionData(color: const Color(0xFFFFC107), value: 35, showTitle: false, radius: 20),
-                          PieChartSectionData(color: const Color(0xFFDC3545), value: 25, showTitle: false, radius: 20),
-                        ],
-                      ),
-                    ),
-                    Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: const [
-                          Text('342', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-                          Text('Total Spots', style: TextStyle(fontSize: 10, color: Color(0xFF64748B))),
-                        ],
-                      ),
-                    )
-                  ],
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    _buildChartLegendItem('Clean Roads', '40%', '(137)', const Color(0xFF198754)),
-                    const SizedBox(height: 12),
-                    _buildChartLegendItem('Slightly Dirty Roads', '35%', '(120)', const Color(0xFFFFC107)),
-                    const SizedBox(height: 12),
-                    _buildChartLegendItem('Very Dirty Roads', '25%', '(85)', const Color(0xFFDC3545)),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: SizedBox(
-                  height: 150,
-                  child: LineChart(
-                    LineChartData(
-                      gridData: FlGridData(show: true, drawVerticalLine: false, getDrawingHorizontalLine: (value) => FlLine(color: const Color(0xFFE2E8F0), strokeWidth: 1, dashArray: [4, 4])),
-                      titlesData: FlTitlesData(
-                        rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                        topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                        bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 22, getTitlesWidget: (value, meta) {
-                          const dates = ['8 May', '9 May', '10 May', '11 May', '12 May', '13 May', '14 May'];
-                          if (value.toInt() >= 0 && value.toInt() < dates.length) {
-                            return Text(dates[value.toInt()], style: const TextStyle(fontSize: 9, color: Color(0xFF64748B)));
-                          }
-                          return const Text('');
-                        })),
-                        leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 28, getTitlesWidget: (value, meta) {
-                          return Text(value.toInt().toString(), style: const TextStyle(fontSize: 10, color: Color(0xFF64748B)));
-                        })),
-                      ),
-                      borderData: FlBorderData(show: false),
-                      minX: 0, maxX: 6, minY: 0, maxY: 400,
-                      lineBarsData: [
-                        LineChartBarData(
-                          spots: const [FlSpot(0, 80), FlSpot(1, 120), FlSpot(2, 90), FlSpot(3, 180), FlSpot(4, 230), FlSpot(5, 180), FlSpot(6, 280)],
-                          isCurved: true,
-                          color: const Color(0xFF198754),
-                          barWidth: 2,
-                          isStrokeCapRound: true,
-                          dotData: FlDotData(show: true, getDotPainter: (spot, percent, barData, index) => FlDotCirclePainter(radius: 4, color: const Color(0xFF198754), strokeWidth: 2, strokeColor: Colors.white)),
-                          belowBarData: BarAreaData(show: false),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              )
-            ],
-          ),
+                donut,
+                const SizedBox(width: 16),
+                Expanded(child: legend),
+                const SizedBox(width: 16),
+                Expanded(child: lineChartWidget),
+              ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildHealthChartCard() {
+  Widget _buildHealthChartCard({bool isMobile = false}) {
+    final donut = SizedBox(
+      width: isMobile ? 110 : 150,
+      height: isMobile ? 110 : 150,
+      child: Stack(
+        children: [
+          PieChart(
+            PieChartData(
+              sectionsSpace: 0,
+              centerSpaceRadius: isMobile ? 35 : 50,
+              sections: [
+                PieChartSectionData(color: const Color(0xFF198754), value: 40, showTitle: false, radius: isMobile ? 16 : 20),
+                PieChartSectionData(color: const Color(0xFFFFC107), value: 35, showTitle: false, radius: isMobile ? 16 : 20),
+                PieChartSectionData(color: const Color(0xFFDC3545), value: 25, showTitle: false, radius: isMobile ? 16 : 20),
+              ],
+            ),
+          ),
+          Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text('215', style: TextStyle(fontSize: isMobile ? 18 : 24, fontWeight: FontWeight.bold)),
+                Text('Total Issues', style: TextStyle(fontSize: isMobile ? 9 : 10, color: const Color(0xFF64748B))),
+              ],
+            ),
+          )
+        ],
+      ),
+    );
+
+    final legend = Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        _buildChartLegendItem('Good Roads', '40%', '(86)', const Color(0xFF198754)),
+        const SizedBox(height: 10),
+        _buildChartLegendItem('Bad Roads', '35%', '(75)', const Color(0xFFFFC107)),
+        const SizedBox(height: 10),
+        _buildChartLegendItem('Potholes', '25%', '(54)', const Color(0xFFDC3545)),
+      ],
+    );
+
+    final lineChartWidget = SizedBox(
+      height: isMobile ? 110 : 150,
+      child: LineChart(
+        LineChartData(
+          gridData: FlGridData(show: true, drawVerticalLine: false, getDrawingHorizontalLine: (value) => FlLine(color: const Color(0xFFE2E8F0), strokeWidth: 1, dashArray: [4, 4])),
+          titlesData: FlTitlesData(
+            rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 22, getTitlesWidget: (value, meta) {
+              const dates = ['8 May', '9 May', '10 May', '11 May', '12 May', '13 May', '14 May'];
+              if (value.toInt() >= 0 && value.toInt() < dates.length) {
+                return Text(dates[value.toInt()], style: const TextStyle(fontSize: 9, color: Color(0xFF64748B)));
+              }
+              return const Text('');
+            })),
+            leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 28, getTitlesWidget: (value, meta) {
+              return Text(value.toInt().toString(), style: const TextStyle(fontSize: 10, color: Color(0xFF64748B)));
+            })),
+          ),
+          borderData: FlBorderData(show: false),
+          minX: 0, maxX: 6, minY: 0, maxY: 250,
+          lineBarsData: [
+            LineChartBarData(
+              spots: const [FlSpot(0, 100), FlSpot(1, 60), FlSpot(2, 50), FlSpot(3, 120), FlSpot(4, 90), FlSpot(5, 140), FlSpot(6, 220)],
+              isCurved: true,
+              color: const Color(0xFFFFC107),
+              barWidth: 2,
+              isStrokeCapRound: true,
+              dotData: FlDotData(show: true, getDotPainter: (spot, percent, barData, index) => FlDotCirclePainter(radius: 4, color: const Color(0xFFFFC107), strokeWidth: 2, strokeColor: Colors.white)),
+              belowBarData: BarAreaData(show: false),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (isMobile) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Road Health Monitor (Last 7 Days)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFF1E293B))),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                donut,
+                const SizedBox(width: 14),
+                Expanded(child: legend),
+              ],
+            ),
+            const SizedBox(height: 14),
+            lineChartWidget,
+          ],
+        ),
+      );
+    }
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -1802,87 +2245,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                SizedBox(
-                width: 150,
-                height: 150,
-                child: Stack(
-                  children: [
-                    PieChart(
-                      PieChartData(
-                        sectionsSpace: 0,
-                        centerSpaceRadius: 50,
-                        sections: [
-                          PieChartSectionData(color: const Color(0xFF198754), value: 40, showTitle: false, radius: 20),
-                          PieChartSectionData(color: const Color(0xFFFFC107), value: 35, showTitle: false, radius: 20),
-                          PieChartSectionData(color: const Color(0xFFDC3545), value: 25, showTitle: false, radius: 20),
-                        ],
-                      ),
-                    ),
-                    Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: const [
-                          Text('215', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-                          Text('Total Issues', style: TextStyle(fontSize: 10, color: Color(0xFF64748B))),
-                        ],
-                      ),
-                    )
-                  ],
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    _buildChartLegendItem('Good Roads', '40%', '(86)', const Color(0xFF198754)),
-                    const SizedBox(height: 12),
-                    _buildChartLegendItem('Bad Roads', '35%', '(75)', const Color(0xFFFFC107)),
-                    const SizedBox(height: 12),
-                    _buildChartLegendItem('Potholes', '25%', '(54)', const Color(0xFFDC3545)),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: SizedBox(
-                  height: 150,
-                  child: LineChart(
-                    LineChartData(
-                      gridData: FlGridData(show: true, drawVerticalLine: false, getDrawingHorizontalLine: (value) => FlLine(color: const Color(0xFFE2E8F0), strokeWidth: 1, dashArray: [4, 4])),
-                      titlesData: FlTitlesData(
-                        rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                        topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                        bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 22, getTitlesWidget: (value, meta) {
-                          const dates = ['8 May', '9 May', '10 May', '11 May', '12 May', '13 May', '14 May'];
-                          if (value.toInt() >= 0 && value.toInt() < dates.length) {
-                            return Text(dates[value.toInt()], style: const TextStyle(fontSize: 9, color: Color(0xFF64748B)));
-                          }
-                          return const Text('');
-                        })),
-                        leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 28, getTitlesWidget: (value, meta) {
-                          return Text(value.toInt().toString(), style: const TextStyle(fontSize: 10, color: Color(0xFF64748B)));
-                        })),
-                      ),
-                      borderData: FlBorderData(show: false),
-                      minX: 0, maxX: 6, minY: 0, maxY: 250,
-                      lineBarsData: [
-                        LineChartBarData(
-                          spots: const [FlSpot(0, 100), FlSpot(1, 60), FlSpot(2, 50), FlSpot(3, 120), FlSpot(4, 90), FlSpot(5, 140), FlSpot(6, 220)],
-                          isCurved: true,
-                          color: const Color(0xFFFFC107),
-                          barWidth: 2,
-                          isStrokeCapRound: true,
-                          dotData: FlDotData(show: true, getDotPainter: (spot, percent, barData, index) => FlDotCirclePainter(radius: 4, color: const Color(0xFFFFC107), strokeWidth: 2, strokeColor: Colors.white)),
-                          belowBarData: BarAreaData(show: false),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              )
-            ],
-          ),
+                donut,
+                const SizedBox(width: 16),
+                Expanded(child: legend),
+                const SizedBox(width: 16),
+                Expanded(child: lineChartWidget),
+              ],
+            ),
           ),
         ],
       ),

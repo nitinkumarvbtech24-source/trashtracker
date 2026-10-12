@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../constants.dart';
 import '../mock_data.dart';
@@ -76,7 +77,7 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
       setState(() {
         _garbageFlags = snapshot.docs
             .map((doc) => GarbageFlag.fromJson(doc.data(), doc.id))
-            .where((f) => f.status != 'Resolved' && (f.className == 'Very_Dirty' || f.className == 'Slightly_Dirty' || f.displayClass == 'Very Dirty' || f.displayClass == 'Slightly Dirty'))
+            .where((f) => f.status != 'Resolved' && (f.className == 'Trash_Detected' || f.className == 'Very_Dirty' || f.className == 'Slightly_Dirty' || f.displayClass == 'Trash Detected' || f.displayClass == 'Very Dirty' || f.displayClass == 'Slightly Dirty'))
             .toList();
       });
       _recalculatePolylines();
@@ -301,12 +302,12 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+            padding: EdgeInsets.fromLTRB(isDesktop ? 24 : 12, isDesktop ? 24 : 12, isDesktop ? 24 : 12, isDesktop ? 16 : 8),
             child: _buildFilterBar(isDesktop),
           ),
           Expanded(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+              padding: EdgeInsets.fromLTRB(isDesktop ? 24 : 12, 0, isDesktop ? 24 : 12, isDesktop ? 24 : 12),
               child: isDesktop ? _buildDesktopLayout() : _buildMobileLayout(),
             ),
           ),
@@ -369,7 +370,7 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
     final wards = ['All Wards', ...availableWards.toSet()];
     final zones = ['All Zones', ..._zones.map((z) => z.name).toSet()];
 
-    return Wrap(
+    final filterContent = Wrap(
       spacing: 16,
       runSpacing: 16,
       crossAxisAlignment: WrapCrossAlignment.center,
@@ -384,8 +385,39 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
         }),
         _buildFunctionalDatePicker(),
         _buildFunctionalToggle(),
+        if (!isDesktop) // add the button to wrap on mobile
+          ElevatedButton.icon(
+            onPressed: () => _showAISettingsDialog(),
+            icon: const Icon(LucideIcons.settings, size: 16, color: Colors.white),
+            label: const Text('AI Settings', style: TextStyle(color: Colors.white)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF0F5132),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            ),
+          ),
       ],
     );
+
+    if (isDesktop) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Expanded(child: filterContent),
+          const SizedBox(width: 16),
+          ElevatedButton.icon(
+            onPressed: () => _showAISettingsDialog(),
+            icon: const Icon(LucideIcons.settings, size: 16, color: Colors.white),
+            label: const Text('AI Settings', style: TextStyle(color: Colors.white)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF0F5132),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            ),
+          ),
+        ],
+      );
+    }
+    
+    return filterContent;
   }
 
   Widget _buildFunctionalDropdown(String label, String value, List<String> items, Function(String) onChanged) {
@@ -517,10 +549,10 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
   }
 
   Widget _buildTopCards(bool isDesktop) {
-    final overallCard = _buildOverallCleanlinessCard();
-    final spotsDetectedCard = _buildGarbageSpotsDetectedCard();
-    final spotsClearedCard = _buildSpotsClearedCard();
-    final officerResponseCard = _buildOfficerResponseCard();
+    final overallCard = _buildOverallCleanlinessCard(!isDesktop);
+    final spotsDetectedCard = _buildGarbageSpotsDetectedCard(!isDesktop);
+    final spotsClearedCard = _buildSpotsClearedCard(!isDesktop);
+    final officerResponseCard = _buildOfficerResponseCard(!isDesktop);
 
     if (isDesktop) {
       return Row(
@@ -540,15 +572,15 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
           Row(
             children: [
               Expanded(child: overallCard),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Expanded(child: spotsDetectedCard),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           Row(
             children: [
               Expanded(child: spotsClearedCard),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Expanded(child: officerResponseCard),
             ],
           ),
@@ -558,29 +590,30 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
   }
 
   
-  Widget _buildOverallCleanlinessCard() {
+  Widget _buildOverallCleanlinessCard(bool isMobile) {
     int total = _garbageFlags.length;
     int cleared = _garbageFlags.where((f) => f.status == 'Resolved').length;
     int cleanliness = total == 0 ? 100 : ((cleared / total) * 100).toInt();
     
     return _buildBaseCard(
+      isMobile: isMobile,
       child: Row(
         children: [
           Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(color: Colors.green.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
-            child: const Icon(Icons.eco, color: Colors.green, size: 28),
+            width: isMobile ? 36 : 48,
+            height: isMobile ? 36 : 48,
+            decoration: BoxDecoration(color: Colors.green.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+            child: Icon(Icons.eco, color: Colors.green, size: isMobile ? 20 : 28),
           ),
-          const SizedBox(width: 16),
+          SizedBox(width: isMobile ? 10 : 16),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: const Text('OVERALL CLEANLINESS', style: TextStyle(color: Colors.black54, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5))),
+                Text('OVERALL CLEANLINESS', style: TextStyle(color: Colors.black54, fontSize: isMobile ? 9 : 11, fontWeight: FontWeight.bold, letterSpacing: 0.3), maxLines: 1, overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 4),
-                Text('%', style: const TextStyle(color: Colors.black87, fontSize: 32, fontWeight: FontWeight.bold)),
+                Text('$cleanliness%', style: TextStyle(color: Colors.black87, fontSize: isMobile ? 20 : 32, fontWeight: FontWeight.bold)),
               ],
             ),
           ),
@@ -590,26 +623,27 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
   }
 
   
-  Widget _buildGarbageSpotsDetectedCard() {
+  Widget _buildGarbageSpotsDetectedCard(bool isMobile) {
     int total = _garbageFlags.length;
     return _buildBaseCard(
+      isMobile: isMobile,
       child: Row(
         children: [
           Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(color: Colors.red.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
-            child: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 28),
+            width: isMobile ? 36 : 48,
+            height: isMobile ? 36 : 48,
+            decoration: BoxDecoration(color: Colors.red.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+            child: Icon(Icons.delete_outline, color: Colors.redAccent, size: isMobile ? 20 : 28),
           ),
-          const SizedBox(width: 16),
+          SizedBox(width: isMobile ? 10 : 16),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: const Text('GARBAGE SPOTS DETECTED', style: TextStyle(color: Colors.black54, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5))),
+                Text('SPOTS DETECTED', style: TextStyle(color: Colors.black54, fontSize: isMobile ? 9 : 11, fontWeight: FontWeight.bold, letterSpacing: 0.3), maxLines: 1, overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 4),
-                Text('', style: const TextStyle(color: Colors.black87, fontSize: 32, fontWeight: FontWeight.bold)),
+                Text('$total', style: TextStyle(color: Colors.black87, fontSize: isMobile ? 20 : 32, fontWeight: FontWeight.bold)),
               ],
             ),
           ),
@@ -619,33 +653,34 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
   }
 
   
-  Widget _buildSpotsClearedCard() {
+  Widget _buildSpotsClearedCard(bool isMobile) {
     int total = _garbageFlags.length;
     int cleared = _garbageFlags.where((f) => f.status == 'Resolved').length;
 
     return _buildBaseCard(
+      isMobile: isMobile,
       child: Row(
         children: [
           Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(color: Colors.blue.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
-            child: const Icon(Icons.check_circle_outline, color: Colors.blueAccent, size: 28),
+            width: isMobile ? 36 : 48,
+            height: isMobile ? 36 : 48,
+            decoration: BoxDecoration(color: Colors.blue.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+            child: Icon(Icons.check_circle_outline, color: Colors.blueAccent, size: isMobile ? 20 : 28),
           ),
-          const SizedBox(width: 16),
+          SizedBox(width: isMobile ? 10 : 16),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: const Text('SPOTS CLEARED', style: TextStyle(color: Colors.black54, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5))),
+                Text('SPOTS CLEARED', style: TextStyle(color: Colors.black54, fontSize: isMobile ? 9 : 11, fontWeight: FontWeight.bold, letterSpacing: 0.3), maxLines: 1, overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 4),
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.baseline,
                   textBaseline: TextBaseline.alphabetic,
                   children: [
-                    Text(' ', style: const TextStyle(color: Colors.blueAccent, fontSize: 32, fontWeight: FontWeight.bold)),
-                    Text('/ ', style: const TextStyle(color: Colors.black54, fontSize: 20, fontWeight: FontWeight.bold)),
+                    Text('$cleared', style: TextStyle(color: Colors.blueAccent, fontSize: isMobile ? 20 : 32, fontWeight: FontWeight.bold)),
+                    Text(' / $total', style: TextStyle(color: Colors.black54, fontSize: isMobile ? 13 : 20, fontWeight: FontWeight.bold)),
                   ],
                 ),
               ],
@@ -656,32 +691,34 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
     );
   }
 
-  Widget _buildOfficerResponseCard() {
-    int total = _garbageFlags.length == 0 ? 342 : _garbageFlags.length;
-    int responded = _garbageFlags.length == 0 ? 227 : _garbageFlags.where((f) => f.status != 'Pending').length;
+  Widget _buildOfficerResponseCard(bool isMobile) {
+    int total = _garbageFlags.isEmpty ? 342 : _garbageFlags.length;
+    int responded = _garbageFlags.isEmpty ? 227 : _garbageFlags.where((f) => f.status != 'Pending').length;
 
     return _buildBaseCard(
+      isMobile: isMobile,
       child: Row(
         children: [
           Container(
-            padding: const EdgeInsets.all(16),
-            decoration: const BoxDecoration(color: Color(0xFFF3E8FF), shape: BoxShape.circle),
-            child: const Icon(LucideIcons.userCircle, color: Colors.purpleAccent, size: 32),
+            width: isMobile ? 36 : 48,
+            height: isMobile ? 36 : 48,
+            decoration: BoxDecoration(color: const Color(0xFFF3E8FF), borderRadius: BorderRadius.circular(10)),
+            child: Icon(LucideIcons.userCircle, color: Colors.purpleAccent, size: isMobile ? 20 : 28),
           ),
-          const SizedBox(width: 16),
+          SizedBox(width: isMobile ? 10 : 16),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: const Text('OFFICER RESPONSE', style: TextStyle(color: Colors.black54, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5))),
-              const SizedBox(height: 4),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.baseline,
-                textBaseline: TextBaseline.alphabetic,
-                children: [
-                  Text(' ', style: const TextStyle(color: Colors.purpleAccent, fontSize: 32, fontWeight: FontWeight.bold)),
-                  Text('/ ', style: const TextStyle(color: Colors.black54, fontSize: 20, fontWeight: FontWeight.bold)),
+                Text('OFFICER RESPONSE', style: TextStyle(color: Colors.black54, fontSize: isMobile ? 9 : 11, fontWeight: FontWeight.bold, letterSpacing: 0.3), maxLines: 1, overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 4),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.baseline,
+                  textBaseline: TextBaseline.alphabetic,
+                  children: [
+                    Text('$responded', style: TextStyle(color: Colors.purpleAccent, fontSize: isMobile ? 20 : 32, fontWeight: FontWeight.bold)),
+                    Text(' / $total', style: TextStyle(color: Colors.black54, fontSize: isMobile ? 13 : 20, fontWeight: FontWeight.bold)),
                   ],
                 ),
               ],
@@ -692,10 +729,10 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
     );
   }
 
-  Widget _buildBaseCard({required Widget child}) {
+  Widget _buildBaseCard({required Widget child, bool isMobile = false}) {
     return Container(
-      height: 120,
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+      height: isMobile ? 85 : 120,
+      padding: EdgeInsets.symmetric(horizontal: isMobile ? 10 : 24, vertical: isMobile ? 10 : 16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
@@ -740,7 +777,7 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
   }
 
   Widget _buildMobileLayout() {
-    return Column(
+    return ListView(
       children: [
         _buildTopCards(false),
         const SizedBox(height: 24),
@@ -809,6 +846,7 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
 
   Widget _buildBarChartCard() {
     return Container(
+      height: 350,
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
@@ -943,7 +981,7 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
     double total = _garbageFlags.isEmpty ? 1 : _garbageFlags.length.toDouble();
     double cleanVal = _garbageFlags.where((f) => f.className == 'Clean').length.toDouble();
     double slightVal = _garbageFlags.where((f) => f.className == 'Slightly_Dirty' || f.displayClass == 'Slightly Dirty').length.toDouble();
-    double dirtyVal = _garbageFlags.where((f) => f.className == 'Very_Dirty' || f.displayClass == 'Very Dirty').length.toDouble();
+    double dirtyVal = _garbageFlags.where((f) => f.className == 'Trash_Detected' || f.className == 'Very_Dirty' || f.displayClass == 'Trash Detected' || f.displayClass == 'Very Dirty').length.toDouble();
 
     if (cleanVal == 0 && slightVal == 0 && dirtyVal == 0) {
       cleanVal = 137;
@@ -956,6 +994,7 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
     }
 
     return Container(
+      height: 350,
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -1270,6 +1309,88 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  void _showAISettingsDialog() async {
+    final prefs = await SharedPreferences.getInstance();
+    final baseUrl = prefs.getString('garbage_ai_v5_url') ?? 'http://127.0.0.1:5001';
+    
+    double currentThreshold = 0.25;
+    bool isLoading = true;
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            if (isLoading) {
+              http.get(Uri.parse('$baseUrl/api/settings')).then((res) {
+                if (res.statusCode == 200) {
+                  final data = json.decode(res.body);
+                  setDialogState(() {
+                    currentThreshold = (data['confidence_threshold'] as num).toDouble();
+                    isLoading = false;
+                  });
+                } else {
+                  setDialogState(() => isLoading = false);
+                }
+              }).catchError((e) {
+                setDialogState(() => isLoading = false);
+              });
+            }
+            return AlertDialog(
+              title: const Text('AI Model Settings', style: TextStyle(fontWeight: FontWeight.bold)),
+              content: isLoading 
+                ? const SizedBox(height: 100, child: Center(child: CircularProgressIndicator(color: Color(0xFF0F5132))))
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Detection Confidence Threshold', style: TextStyle(fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 8),
+                      Text('Current: ${(currentThreshold * 100).toInt()}%', style: const TextStyle(color: Colors.grey)),
+                      Slider(
+                        value: currentThreshold,
+                        min: 0.1,
+                        max: 0.9,
+                        divisions: 16,
+                        activeColor: const Color(0xFF0F5132),
+                        label: '${(currentThreshold * 100).toInt()}%',
+                        onChanged: (val) {
+                          setDialogState(() => currentThreshold = val);
+                        },
+                      ),
+                      const Text('Lower threshold = more detections, higher false positives.\nHigher threshold = fewer detections, more accurate.', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                    ],
+                  ),
+              actions: [
+                TextButton(
+                  onPressed: isLoading ? null : () => Navigator.pop(context),
+                  child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+                ),
+                ElevatedButton(
+                  onPressed: isLoading ? null : () async {
+                    setDialogState(() => isLoading = true);
+                    try {
+                      await http.post(
+                        Uri.parse('$baseUrl/api/settings'),
+                        headers: {'Content-Type': 'application/json'},
+                        body: json.encode({'confidence_threshold': currentThreshold}),
+                      );
+                    } catch (e) {}
+                    if (context.mounted) Navigator.pop(context);
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0F5132)),
+                  child: const Text('Save Changes', style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            );
+          }
+        );
+      }
     );
   }
 }

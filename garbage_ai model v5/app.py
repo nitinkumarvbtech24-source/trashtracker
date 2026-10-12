@@ -443,11 +443,9 @@ async def process_frame(req: FrameRequest):
     res = detect_road_trash(img_bytes)
     
     if res["trash_count"] == 0:
-        road_status = "Clean Road"
-    elif res["trash_count"] < 3:
-        road_status = "Slightly Dirty Road"
+        road_status = "No Trash Detected"
     else:
-        road_status = "Very Dirty Road"
+        road_status = "Trash Detected"
 
     out_header, out_encoded = res["annotated_image"].split(",", 1)
     out_bytes = base64.b64decode(out_encoded)
@@ -468,6 +466,7 @@ async def process_frame(req: FrameRequest):
         "zone": req.zone,
         "timestamp": datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
     }
+    
     history.append(snapshot)
     # Keeping up to 1000 recent records in local database
     if len(history) > 1000:

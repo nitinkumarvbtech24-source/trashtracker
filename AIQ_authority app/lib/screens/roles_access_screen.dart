@@ -8,7 +8,6 @@ import 'package:flutter_map/flutter_map.dart';
 import '../models/ward.dart';
 import '../models/zone.dart';
 import '../services/role_service.dart';
-import 'officers_list_screen.dart';
 
 enum ResourceMapMode { view, drawWard, drawZone }
 
@@ -327,31 +326,36 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = MediaQuery.of(context).size.width < 768;
     return Container(
       color: const Color(0xFFF8F9FA),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildTabs(),
+          _buildTabs(isMobile),
           const Divider(height: 1, color: Color(0xFFE2E8F0)),
           Expanded(
             child: Padding(
-              padding: const EdgeInsets.all(24.0),
+              padding: EdgeInsets.all(isMobile ? 12.0 : 24.0),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: _selectedTabIndex == 0
-                  ? [ _buildDashboardTab() ]
+                  ? [ _buildDashboardTab(isMobile: isMobile) ]
                   : _selectedTabIndex == 1
                     ? [
                         _buildLeftColumn(),
-                        const SizedBox(width: 24),
-                        _buildRightColumn(),
+                        if (!isMobile) const SizedBox(width: 24),
+                        if (!isMobile) _buildRightColumn(),
                       ]
                     : _selectedTabIndex == 2
                       ? [
-                          _buildUserManagementLeftColumn(),
-                          if (_isUserFormVisible) const SizedBox(width: 24),
-                          if (_isUserFormVisible) _buildUserManagementRightColumn(),
+                          if (isMobile && _isUserFormVisible)
+                            _buildUserManagementRightColumn()
+                          else ...[
+                            _buildUserManagementLeftColumn(),
+                            if (_isUserFormVisible) const SizedBox(width: 24),
+                            if (_isUserFormVisible) _buildUserManagementRightColumn(),
+                          ]
                         ]
                       : [
                           Expanded(
@@ -362,9 +366,13 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
                                     ? Row(
                                         crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
-                                          _buildResourceManagementLeftColumn(),
-                                          if (_isResourceFormVisible) const SizedBox(width: 24),
-                                          if (_isResourceFormVisible) _buildResourceManagementRightColumn(),
+                                          if (isMobile && _isResourceFormVisible)
+                                            _buildResourceManagementRightColumn()
+                                          else ...[
+                                            _buildResourceManagementLeftColumn(),
+                                            if (_isResourceFormVisible) const SizedBox(width: 24),
+                                            if (_isResourceFormVisible) _buildResourceManagementRightColumn(),
+                                          ]
                                         ],
                                       )
                                     : _buildResourceMapMode(),
@@ -382,20 +390,23 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
     );
   }
 
-  Widget _buildTabs() {
+  Widget _buildTabs(bool isMobile) {
     return Container(
       color: Colors.white,
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      child: Row(
-        children: [
-          _buildTabItem('Region Dashboard', 0),
-          const SizedBox(width: 32),
-          _buildTabItem('Role Management', 1),
-          const SizedBox(width: 32),
-          _buildTabItem('User Management', 2),
-          const SizedBox(width: 32),
-          _buildTabItem('Resource Management', 3),
-        ],
+      padding: EdgeInsets.symmetric(horizontal: isMobile ? 12 : 24),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            _buildTabItem('Region Dashboard', 0),
+            SizedBox(width: isMobile ? 20 : 32),
+            _buildTabItem('Role Management', 1),
+            SizedBox(width: isMobile ? 20 : 32),
+            _buildTabItem('User Management', 2),
+            SizedBox(width: isMobile ? 20 : 32),
+            _buildTabItem('Resource Management', 3),
+          ],
+        ),
       ),
     );
   }
@@ -3067,249 +3078,293 @@ class _RolesAccessScreenState extends State<RolesAccessScreen> {
     return isInside;
   }
 
-  Widget _buildDashboardTab() {
+  Widget _buildDashboardTab({bool isMobile = false}) {
+    final mapWidget = Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        children: [
+          FlutterMap(
+            mapController: _dashboardMapController,
+            options: MapOptions(
+              initialCenter: const LatLng(12.9716, 77.5946),
+              initialZoom: 12.0,
+              onTap: (tapPosition, point) {
+                 bool tappedAWard = false;
+                 for (var w in _wardModels) {
+                    if (_isPointInPolygon(point, w.boundary)) {
+                       Zone? parentZone;
+                       for (var z in _zoneModels) {
+                          if (_isWardInZone(w, z)) { parentZone = z; break; }
+                       }
+                       setState(() {
+                          _showDirectoryPanel = true;
+                          _dashboardSelectedZone = parentZone;
+                          _dashboardSelectedWard = w;
+                       });
+                       tappedAWard = true;
+                       break;
+                    }
+                 }
+                 if (!tappedAWard) {
+                    for (var z in _zoneModels) {
+                       if (_isPointInPolygon(point, z.boundary)) {
+                          setState(() {
+                             _showDirectoryPanel = true;
+                             _dashboardSelectedZone = z;
+                             _dashboardSelectedWard = null;
+                          });
+                          break;
+                       }
+                    }
+                 }
+              },
+            ),
+            children: [
+              TileLayer(
+                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                userAgentPackageName: 'com.nitin.trashtracker',
+              ),
+              Builder(
+                builder: (context) {
+                  final camera = MapCamera.of(context);
+                  final showWards = camera.zoom >= 13.5;
+                  
+                  return PolygonLayer(
+                    polygons: [
+                      ..._zoneModels.where((z) => z.boundary.isNotEmpty).map((z) => Polygon(
+                        points: z.boundary,
+                        color: (_dashboardSelectedZone?.id == z.id && _dashboardSelectedWard == null) ? Colors.green.withOpacity(0.3) : Colors.green.withOpacity(0.15),
+                        borderColor: Colors.green,
+                        borderStrokeWidth: (_dashboardSelectedZone?.id == z.id && _dashboardSelectedWard == null) ? 3 : 1.5,
+                      )),
+                      if (showWards)
+                        ..._wardModels.where((w) => w.boundary.isNotEmpty).map((w) => Polygon(
+                          points: w.boundary,
+                          color: (_dashboardSelectedWard?.id == w.id) ? Colors.blue.withOpacity(0.4) : Colors.blue.withOpacity(0.15),
+                          borderColor: Colors.blue,
+                          borderStrokeWidth: (_dashboardSelectedWard?.id == w.id) ? 3 : 1.5,
+                        )),
+                    ],
+                  );
+                }
+              ),
+              Builder(
+                builder: (context) {
+                  final camera = MapCamera.of(context);
+                  final showWards = camera.zoom >= 13.5;
+                  
+                  final List<Marker> labels = [];
+                  
+                  if (!showWards) {
+                    for (var z in _zoneModels.where((z) => z.boundary.isNotEmpty)) {
+                      double cLat = 0, cLng = 0;
+                      for (var p in z.boundary) { cLat += p.latitude; cLng += p.longitude; }
+                      labels.add(Marker(
+                        point: LatLng(cLat / z.boundary.length, cLng / z.boundary.length),
+                        width: 140,
+                        height: 40,
+                        child: Center(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.9),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: Colors.green.shade700, width: 1.5),
+                            ),
+                            child: Text(
+                              z.name,
+                              style: TextStyle(color: Colors.green.shade900, fontWeight: FontWeight.bold, fontSize: 13),
+                              textAlign: TextAlign.center,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ),
+                      ));
+                    }
+                  }
+                  
+                  if (showWards) {
+                    for (var w in _wardModels.where((w) => w.boundary.isNotEmpty)) {
+                      double cLat = 0, cLng = 0;
+                      for (var p in w.boundary) { cLat += p.latitude; cLng += p.longitude; }
+                      labels.add(Marker(
+                        point: LatLng(cLat / w.boundary.length, cLng / w.boundary.length),
+                        width: 120,
+                        height: 40,
+                        child: Center(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.85),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(color: Colors.blue.shade700, width: 1),
+                            ),
+                            child: Text(
+                              w.name,
+                              style: TextStyle(color: Colors.blue.shade900, fontWeight: FontWeight.bold, fontSize: 11),
+                              textAlign: TextAlign.center,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ),
+                      ));
+                    }
+                  }
+
+                  return MarkerLayer(markers: labels);
+                }
+              ),
+            ],
+          ),
+          
+          // Zoom controls
+          _buildMapZoomControls(_dashboardMapController),
+
+          // Info toggle button
+          Positioned(
+            top: 16,
+            right: 16,
+            child: ElevatedButton.icon(
+              onPressed: () => setState(() => _showDirectoryPanel = !_showDirectoryPanel),
+              icon: Icon(_showDirectoryPanel ? LucideIcons.x : LucideIcons.info, size: 18),
+              label: Text(_showDirectoryPanel ? 'Close Directory' : 'Region Directory'),
+              style: ElevatedButton.styleFrom(
+                 backgroundColor: Colors.white,
+                 foregroundColor: Colors.black87,
+              ),
+            ),
+          ),
+
+          // Bottom Analytics Panel
+          if (_dashboardSelectedWard != null)
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: _buildWardAnalyticsPanel(_dashboardSelectedWard!, () => setState(() => _dashboardSelectedWard = null)),
+            ),
+        ],
+      ),
+    );
+
     return Expanded(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // Metric Cards
-          Row(
-            children: [
-              _buildMetricCard('Total Zones', _zoneModels.length.toString(), LucideIcons.map),
-              const SizedBox(width: 16),
-              _buildMetricCard('Total Wards', _wardModels.length.toString(), LucideIcons.mapPin),
-              const SizedBox(width: 16),
-              _buildMetricCard('Total Users', _users.length.toString(), LucideIcons.users),
-            ],
-          ),
-          const SizedBox(height: 24),
-          // Map and Directory Panel
-          Expanded(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+          if (isMobile)
+            Column(
               children: [
-                // Map Area
-                Expanded(
-                  flex: 3,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0xFFE2E8F0)),
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: Stack(
-                      children: [
-                        FlutterMap(
-                          mapController: _dashboardMapController,
-                          options: MapOptions(
-                            initialCenter: const LatLng(12.9716, 77.5946),
-                            initialZoom: 12.0,
-                            onTap: (tapPosition, point) {
-                               bool tappedAWard = false;
-                               for (var w in _wardModels) {
-                                  if (_isPointInPolygon(point, w.boundary)) {
-                                     Zone? parentZone;
-                                     for (var z in _zoneModels) {
-                                        if (_isWardInZone(w, z)) { parentZone = z; break; }
-                                     }
-                                     setState(() {
-                                        _showDirectoryPanel = true;
-                                        _dashboardSelectedZone = parentZone;
-                                        _dashboardSelectedWard = w;
-                                     });
-                                     tappedAWard = true;
-                                     break;
-                                  }
-                               }
-                               if (!tappedAWard) {
-                                  for (var z in _zoneModels) {
-                                     if (_isPointInPolygon(point, z.boundary)) {
-                                        setState(() {
-                                           _showDirectoryPanel = true;
-                                           _dashboardSelectedZone = z;
-                                           _dashboardSelectedWard = null;
-                                        });
-                                        break;
-                                     }
-                                  }
-                               }
-                            },
-                          ),
-                          children: [
-                            TileLayer(
-                              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                              userAgentPackageName: 'com.nitin.trashtracker',
-                            ),
-                            Builder(
-                              builder: (context) {
-                                final camera = MapCamera.of(context);
-                                final showWards = camera.zoom >= 13.5;
-                                
-                                return PolygonLayer(
-                                  polygons: [
-                                    ..._zoneModels.where((z) => z.boundary.isNotEmpty).map((z) => Polygon(
-                                      points: z.boundary,
-                                      color: (_dashboardSelectedZone?.id == z.id && _dashboardSelectedWard == null) ? Colors.green.withOpacity(0.3) : Colors.green.withOpacity(0.15),
-                                      borderColor: Colors.green,
-                                      borderStrokeWidth: (_dashboardSelectedZone?.id == z.id && _dashboardSelectedWard == null) ? 3 : 1.5,
-                                    )),
-                                    if (showWards)
-                                      ..._wardModels.where((w) => w.boundary.isNotEmpty).map((w) => Polygon(
-                                        points: w.boundary,
-                                        color: (_dashboardSelectedWard?.id == w.id) ? Colors.blue.withOpacity(0.4) : Colors.blue.withOpacity(0.15),
-                                        borderColor: Colors.blue,
-                                        borderStrokeWidth: (_dashboardSelectedWard?.id == w.id) ? 3 : 1.5,
-                                      )),
-                                  ],
-                                );
-                              }
-                            ),
-                            Builder(
-                              builder: (context) {
-                                final camera = MapCamera.of(context);
-                                final showWards = camera.zoom >= 13.5;
-                                
-                                final List<Marker> labels = [];
-                                
-                                if (!showWards) {
-                                  for (var z in _zoneModels.where((z) => z.boundary.isNotEmpty)) {
-                                    double cLat = 0, cLng = 0;
-                                    for (var p in z.boundary) { cLat += p.latitude; cLng += p.longitude; }
-                                    labels.add(Marker(
-                                      point: LatLng(cLat / z.boundary.length, cLng / z.boundary.length),
-                                      width: 140,
-                                      height: 40,
-                                      child: Center(
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                          decoration: BoxDecoration(
-                                            color: Colors.white.withOpacity(0.9),
-                                            borderRadius: BorderRadius.circular(6),
-                                            border: Border.all(color: Colors.green.shade700, width: 1.5),
-                                          ),
-                                          child: Text(
-                                            z.name,
-                                            style: TextStyle(color: Colors.green.shade900, fontWeight: FontWeight.bold, fontSize: 13),
-                                            textAlign: TextAlign.center,
-                                            maxLines: 2,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                        ),
-                                      ),
-                                    ));
-                                  }
-                                }
-                                
-                                if (showWards) {
-                                  for (var w in _wardModels.where((w) => w.boundary.isNotEmpty)) {
-                                    double cLat = 0, cLng = 0;
-                                    for (var p in w.boundary) { cLat += p.latitude; cLng += p.longitude; }
-                                    labels.add(Marker(
-                                      point: LatLng(cLat / w.boundary.length, cLng / w.boundary.length),
-                                      width: 120,
-                                      height: 40,
-                                      child: Center(
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                          decoration: BoxDecoration(
-                                            color: Colors.white.withOpacity(0.85),
-                                            borderRadius: BorderRadius.circular(4),
-                                            border: Border.all(color: Colors.blue.shade700, width: 1),
-                                          ),
-                                          child: Text(
-                                            w.name,
-                                            style: TextStyle(color: Colors.blue.shade900, fontWeight: FontWeight.bold, fontSize: 11),
-                                            textAlign: TextAlign.center,
-                                            maxLines: 2,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                        ),
-                                      ),
-                                    ));
-                                  }
-                                }
-
-                                return MarkerLayer(markers: labels);
-                              }
-                            ),
-                          ],
-                        ),
-                        
-                        // Zoom controls
-                        _buildMapZoomControls(_dashboardMapController),
-
-                        // Info toggle button
-                        Positioned(
-                          top: 16,
-                          right: 16,
-                          child: ElevatedButton.icon(
-                            onPressed: () => setState(() => _showDirectoryPanel = !_showDirectoryPanel),
-                            icon: Icon(_showDirectoryPanel ? LucideIcons.x : LucideIcons.info, size: 18),
-                            label: Text(_showDirectoryPanel ? 'Close Directory' : 'Region Directory'),
-                            style: ElevatedButton.styleFrom(
-                               backgroundColor: Colors.white,
-                               foregroundColor: Colors.black87,
-                            ),
-                          ),
-                        ),
-
-                        // Bottom Analytics Panel
-                        if (_dashboardSelectedWard != null)
-                          Positioned(
-                            bottom: 0,
-                            left: 0,
-                            right: 0,
-                            child: _buildWardAnalyticsPanel(_dashboardSelectedWard!, () => setState(() => _dashboardSelectedWard = null)),
-                          ),
-                      ],
-                    ),
-                  ),
+                Row(
+                  children: [
+                    _buildMetricCard('Total Zones', _zoneModels.length.toString(), LucideIcons.map, isMobile: true),
+                    const SizedBox(width: 10),
+                    _buildMetricCard('Total Wards', _wardModels.length.toString(), LucideIcons.mapPin, isMobile: true),
+                  ],
                 ),
-                if (_showDirectoryPanel) const SizedBox(width: 24),
-                // Directory Panel
-                if (_showDirectoryPanel)
-                  Expanded(
-                    flex: 1,
-                    child: _buildDashboardDirectoryPanel(),
-                  )
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    _buildMetricCard('Total Users', _users.length.toString(), LucideIcons.users, isMobile: true),
+                  ],
+                ),
+              ],
+            )
+          else
+            Row(
+              children: [
+                _buildMetricCard('Total Zones', _zoneModels.length.toString(), LucideIcons.map, isMobile: false),
+                const SizedBox(width: 16),
+                _buildMetricCard('Total Wards', _wardModels.length.toString(), LucideIcons.mapPin, isMobile: false),
+                const SizedBox(width: 16),
+                _buildMetricCard('Total Users', _users.length.toString(), LucideIcons.users, isMobile: false),
               ],
             ),
+          SizedBox(height: isMobile ? 12 : 24),
+          // Map and Directory Panel
+          Expanded(
+            child: isMobile
+              ? Stack(
+                  children: [
+                    mapWidget,
+                    if (_showDirectoryPanel)
+                      Positioned(
+                        top: 60,
+                        left: 8,
+                        right: 8,
+                        bottom: 8,
+                        child: Material(
+                          elevation: 8,
+                          borderRadius: BorderRadius.circular(12),
+                          clipBehavior: Clip.antiAlias,
+                          child: _buildDashboardDirectoryPanel(),
+                        ),
+                      ),
+                  ],
+                )
+              : Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      flex: 3,
+                      child: mapWidget,
+                    ),
+                    if (_showDirectoryPanel) const SizedBox(width: 24),
+                    if (_showDirectoryPanel)
+                      Expanded(
+                        flex: 1,
+                        child: _buildDashboardDirectoryPanel(),
+                      ),
+                  ],
+                ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildMetricCard(String title, String value, IconData icon) {
+  Widget _buildMetricCard(String title, String value, IconData icon, {bool isMobile = false}) {
     return Expanded(
       child: Container(
-        padding: const EdgeInsets.all(20),
+        height: isMobile ? 80 : 100,
+        padding: EdgeInsets.symmetric(horizontal: isMobile ? 12 : 20, vertical: isMobile ? 10 : 16),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFFE2E8F0)),
+          border: Border.all(color: Colors.grey.shade200),
           boxShadow: [
-            BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 4, offset: const Offset(0, 2))
+            BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 8, offset: const Offset(0, 3))
           ],
         ),
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             Container(
-              padding: const EdgeInsets.all(12),
+              width: isMobile ? 36 : 46,
+              height: isMobile ? 36 : 46,
               decoration: BoxDecoration(
-                color: Colors.blue.shade50,
+                color: Colors.blue.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Icon(icon, color: Colors.blue.shade700, size: 24),
+              child: Icon(icon, color: Colors.blue.shade700, size: isMobile ? 18 : 24),
             ),
-            const SizedBox(width: 16),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: const TextStyle(color: Color(0xFF64748B), fontSize: 14)),
-                const SizedBox(height: 4),
-                Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 24, color: Color(0xFF1E293B))),
-              ],
+            SizedBox(width: isMobile ? 10 : 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(title.toUpperCase(), style: TextStyle(color: Colors.black54, fontSize: isMobile ? 9 : 11, fontWeight: FontWeight.bold, letterSpacing: 0.3), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 3),
+                  Text(value, style: TextStyle(fontWeight: FontWeight.bold, fontSize: isMobile ? 18 : 26, color: const Color(0xFF1E293B))),
+                ],
+              ),
             ),
           ],
         ),

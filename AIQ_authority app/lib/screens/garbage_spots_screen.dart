@@ -12,6 +12,8 @@ import 'package:latlong2/latlong.dart';
 import '../models/garbage_flag.dart';
 import '../widgets/ngrok_image.dart';
 import '../services/role_service.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 class GarbageSpotsScreen extends StatefulWidget {
   const GarbageSpotsScreen({super.key});
@@ -74,7 +76,7 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
       setState(() {
         _garbageFlags = snapshot.docs
             .map((doc) => GarbageFlag.fromJson(doc.data(), doc.id))
-            .where((f) => f.className == 'Very_Dirty' || f.className == 'Slightly_Dirty' || f.displayClass == 'Very Dirty' || f.displayClass == 'Slightly Dirty')
+            .where((f) => f.className == 'Trash_Detected' || f.className == 'Very_Dirty' || f.className == 'Slightly_Dirty' || f.displayClass == 'Trash Detected' || f.displayClass == 'Very Dirty' || f.displayClass == 'Slightly Dirty')
             .toList();
         
         // Sort by timestamp descending
@@ -1127,6 +1129,92 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  void _showAISettingsDialog() async {
+    final prefs = await SharedPreferences.getInstance();
+    final baseUrl = prefs.getString('garbage_ai_v5_url') ?? 'http://127.0.0.1:5001';
+    
+    double currentThreshold = 0.25;
+    bool isLoading = true;
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            if (isLoading) {
+              // Fetch current threshold
+              http.get(Uri.parse('$baseUrl/api/settings')).then((res) {
+                if (res.statusCode == 200) {
+                  final data = json.decode(res.body);
+                  setDialogState(() {
+                    currentThreshold = (data['confidence_threshold'] as num).toDouble();
+                    isLoading = false;
+                  });
+                } else {
+                  setDialogState(() => isLoading = false);
+                }
+              }).catchError((e) {
+                setDialogState(() => isLoading = false);
+              });
+            }
+
+            return AlertDialog(
+              title: const Text('AI Model Settings', style: TextStyle(fontWeight: FontWeight.bold)),
+              content: isLoading 
+                ? const SizedBox(height: 100, child: Center(child: CircularProgressIndicator(color: Color(0xFF0F5132))))
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Detection Confidence Threshold', style: TextStyle(fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 8),
+                      Text('Current: ${(currentThreshold * 100).toInt()}%', style: const TextStyle(color: Colors.grey)),
+                      Slider(
+                        value: currentThreshold,
+                        min: 0.1,
+                        max: 0.9,
+                        divisions: 16,
+                        activeColor: const Color(0xFF0F5132),
+                        label: '${(currentThreshold * 100).toInt()}%',
+                        onChanged: (val) {
+                          setDialogState(() => currentThreshold = val);
+                        },
+                      ),
+                      const Text('Lower threshold = more detections, higher false positives.\nHigher threshold = fewer detections, more accurate.', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                    ],
+                  ),
+              actions: [
+                TextButton(
+                  onPressed: isLoading ? null : () => Navigator.pop(context),
+                  child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+                ),
+                ElevatedButton(
+                  onPressed: isLoading ? null : () async {
+                    setDialogState(() => isLoading = true);
+                    try {
+                      await http.post(
+                        Uri.parse('$baseUrl/api/settings'),
+                        headers: {'Content-Type': 'application/json'},
+                        body: json.encode({'confidence_threshold': currentThreshold}),
+                      );
+                    } catch (e) {
+                      debugPrint('Error saving settings: $e');
+                    }
+                    if (context.mounted) Navigator.pop(context);
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0F5132)),
+                  child: const Text('Save Changes', style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            );
+          }
+        );
+      }
     );
   }
 }

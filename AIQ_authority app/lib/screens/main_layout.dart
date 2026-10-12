@@ -12,6 +12,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/role_service.dart';
 import '../../main.dart' as app_main;
 import 'comnd_screen.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 
 class MainLayout extends StatefulWidget {
   const MainLayout({super.key});
@@ -21,6 +23,7 @@ class MainLayout extends StatefulWidget {
 }
 
 class _MainLayoutState extends State<MainLayout> {
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   int _selectedIndex = 1; // Default to Fleets & Routes for this task
   bool _isSidebarOpen = true; // Open by default based on mockup
   String _userName = 'Loading...';
@@ -74,11 +77,13 @@ class _MainLayoutState extends State<MainLayout> {
   @override
   Widget build(BuildContext context) {
     // Automatically hide sidebar on mobile devices
-    final isMobile = ResponsiveBreakpoints.of(context).isMobile;
+    final isMobile = ResponsiveBreakpoints.of(context).smallerOrEqualTo(TABLET) || MediaQuery.of(context).size.width < 800;
     final showSidebar = !isMobile && _isSidebarOpen;
 
     return Scaffold(
+      key: _scaffoldKey,
       backgroundColor: const Color(0xFFF8F9FA),
+      drawer: isMobile ? Drawer(child: _buildSidebar(isDrawer: true)) : null,
       body: Row(
         children: [
           if (showSidebar) _buildSidebar(),
@@ -105,9 +110,13 @@ class _MainLayoutState extends State<MainLayout> {
         children: [
           IconButton(
             onPressed: () {
-              setState(() {
-                _isSidebarOpen = !_isSidebarOpen;
-              });
+              if (isMobile) {
+                _scaffoldKey.currentState?.openDrawer();
+              } else {
+                setState(() {
+                  _isSidebarOpen = !_isSidebarOpen;
+                });
+              }
             },
             icon: const Icon(LucideIcons.menu, color: Colors.white, size: 28),
             padding: EdgeInsets.zero,
@@ -167,96 +176,99 @@ class _MainLayoutState extends State<MainLayout> {
     }
   }
 
-  Widget _buildSidebar() {
+  Widget _buildSidebar({bool isDrawer = false}) {
     return Container(
-      width: 260,
+      width: isDrawer ? null : 260,
       color: Colors.white,
-      child: Stack(
-        children: [
-          Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
-            height: 350,
-            child: Opacity(
-              opacity: 0.15,
-              child: Image.network(
-                'https://upload.wikimedia.org/wikipedia/commons/thumb/4/41/Skyline_silhouette.svg/1280px-Skyline_silhouette.svg.png',
-                fit: BoxFit.cover,
-                alignment: Alignment.bottomCenter,
-                color: const Color(0xFF4B7171),
-                colorBlendMode: BlendMode.srcIn,
-                errorBuilder: (context, error, stackTrace) => const SizedBox(),
+      child: SafeArea(
+        top: isDrawer,
+        bottom: isDrawer,
+        child: Stack(
+          children: [
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              height: 350,
+              child: Opacity(
+                opacity: 0.15,
+                child: Image.network(
+                  'https://upload.wikimedia.org/wikipedia/commons/thumb/4/41/Skyline_silhouette.svg/1280px-Skyline_silhouette.svg.png',
+                  fit: BoxFit.cover,
+                  alignment: Alignment.bottomCenter,
+                  color: const Color(0xFF4B7171),
+                  colorBlendMode: BlendMode.srcIn,
+                  errorBuilder: (context, error, stackTrace) => const SizedBox(),
+                ),
               ),
             ),
-          ),
-          Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(top: 40, bottom: 24, left: 24, right: 24),
-                child: Column(
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: const [
-                        Text(
-                          'STREET\nAIQ',
-                          style: TextStyle(
-                            color: Color(0xFF0F5132),
-                            fontSize: 24,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: 1.2,
-                            height: 1.0,
+            Column(
+              children: [
+                Padding(
+                  padding: EdgeInsets.only(top: isDrawer ? 20 : 40, bottom: 24, left: 24, right: 24),
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: const [
+                          Text(
+                            'STREET\nAIQ',
+                            style: TextStyle(
+                              color: Color(0xFF0F5132),
+                              fontSize: 24,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 1.2,
+                              height: 1.0,
+                            ),
+                            textAlign: TextAlign.center,
                           ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Container(
-                      height: 1.5,
-                      color: const Color(0xFF0F5132),
-                      width: 100,
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'URBAN INTELLIGENCE AS A SERVICE',
-                      style: TextStyle(
-                        color: Color(0xFF344054),
-                        fontSize: 8,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 0.5,
+                        ],
                       ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
+                      const SizedBox(height: 8),
+                      Container(
+                        height: 1.5,
+                        color: const Color(0xFF0F5132),
+                        width: 100,
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'URBAN INTELLIGENCE AS A SERVICE',
+                        style: TextStyle(
+                          color: Color(0xFF344054),
+                          fontSize: 8,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.5,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              
-              const SizedBox(height: 16),
+                
+                const SizedBox(height: 16),
 
-              Expanded(
-                child: ListView(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  children: [
-                    _buildNavItem(0, 'Roles & Access', LucideIcons.users),
-                    const SizedBox(height: 4),
-                    _buildNavItem(1, 'Master Dashboard', LucideIcons.home),
-                    const SizedBox(height: 4),
-                    _buildNavItem(2, 'Fleets & Routes', LucideIcons.truck),
-                    const SizedBox(height: 4),
-                    _buildNavItem(3, 'COM&D', LucideIcons.messageSquare),
-                    const SizedBox(height: 4),
-                    _buildNavItem(4, 'Street Cleanliness AI', LucideIcons.sparkles),
-                    const SizedBox(height: 4),
-                    _buildNavItem(5, 'Road Health Monitor AI', LucideIcons.car),
-                    const SizedBox(height: 4),
-                    _buildNavItem(6, 'Reports', LucideIcons.fileText),
-                    const SizedBox(height: 4),
-                    _buildNavItem(7, 'Settings', LucideIcons.settings),
-                  ],
+                Expanded(
+                  child: ListView(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    children: [
+                      _buildNavItem(0, 'Roles & Access', LucideIcons.users, isDrawer: isDrawer),
+                      const SizedBox(height: 4),
+                      _buildNavItem(1, 'Master Dashboard', LucideIcons.home, isDrawer: isDrawer),
+                      const SizedBox(height: 4),
+                      _buildNavItem(2, 'Fleets & Routes', LucideIcons.truck, isDrawer: isDrawer),
+                      const SizedBox(height: 4),
+                      _buildNavItem(3, 'COM&D', LucideIcons.messageSquare, isDrawer: isDrawer),
+                      const SizedBox(height: 4),
+                      _buildNavItem(4, 'Street Cleanliness AI', LucideIcons.sparkles, isDrawer: isDrawer),
+                      const SizedBox(height: 4),
+                      _buildNavItem(5, 'Road Health Monitor AI', LucideIcons.car, isDrawer: isDrawer),
+                      const SizedBox(height: 4),
+                      _buildNavItem(6, 'Reports', LucideIcons.fileText, isDrawer: isDrawer),
+                      const SizedBox(height: 4),
+                      _buildNavItem(7, 'Settings', LucideIcons.settings, isDrawer: isDrawer),
+                    ],
+                  ),
                 ),
-              ),
 
               PopupMenuButton<String>(
                 color: Colors.white,
@@ -324,10 +336,11 @@ class _MainLayoutState extends State<MainLayout> {
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 
-  Widget _buildNavItem(int index, String title, IconData icon) {
+  Widget _buildNavItem(int index, String title, IconData icon, {bool isDrawer = false}) {
     if (_userRole != 'Super Admin') {
       final perms = RoleService.getRolePermissions(_userRole);
       if (perms != null && perms[title] != null) {
@@ -345,6 +358,9 @@ class _MainLayoutState extends State<MainLayout> {
         setState(() {
           _selectedIndex = index;
         });
+        if (isDrawer) {
+          Navigator.of(context).pop();
+        }
       },
       borderRadius: BorderRadius.circular(8),
       child: Container(
@@ -374,6 +390,88 @@ class _MainLayoutState extends State<MainLayout> {
           ],
         ),
       ),
+    );
+  }
+
+  void _showAISettingsDialog() async {
+    final prefs = await SharedPreferences.getInstance();
+    final baseUrl = prefs.getString('garbage_ai_v5_url') ?? 'http://127.0.0.1:5001';
+    
+    double currentThreshold = 0.25;
+    bool isLoading = true;
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            if (isLoading) {
+              http.get(Uri.parse('$baseUrl/api/settings')).then((res) {
+                if (res.statusCode == 200) {
+                  final data = json.decode(res.body);
+                  setDialogState(() {
+                    currentThreshold = (data['confidence_threshold'] as num).toDouble();
+                    isLoading = false;
+                  });
+                } else {
+                  setDialogState(() => isLoading = false);
+                }
+              }).catchError((e) {
+                setDialogState(() => isLoading = false);
+              });
+            }
+            return AlertDialog(
+              title: const Text('AI Model Settings', style: TextStyle(fontWeight: FontWeight.bold)),
+              content: isLoading 
+                ? const SizedBox(height: 100, child: Center(child: CircularProgressIndicator(color: Color(0xFF0F5132))))
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Detection Confidence Threshold', style: TextStyle(fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 8),
+                      Text('Current: ${(currentThreshold * 100).toInt()}%', style: const TextStyle(color: Colors.grey)),
+                      Slider(
+                        value: currentThreshold,
+                        min: 0.1,
+                        max: 0.9,
+                        divisions: 16,
+                        activeColor: const Color(0xFF0F5132),
+                        label: '${(currentThreshold * 100).toInt()}%',
+                        onChanged: (val) {
+                          setDialogState(() => currentThreshold = val);
+                        },
+                      ),
+                      const Text('Lower threshold = more detections, higher false positives.\nHigher threshold = fewer detections, more accurate.', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                    ],
+                  ),
+              actions: [
+                TextButton(
+                  onPressed: isLoading ? null : () => Navigator.pop(context),
+                  child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+                ),
+                ElevatedButton(
+                  onPressed: isLoading ? null : () async {
+                    setDialogState(() => isLoading = true);
+                    try {
+                      await http.post(
+                        Uri.parse('$baseUrl/api/settings'),
+                        headers: {'Content-Type': 'application/json'},
+                        body: json.encode({'confidence_threshold': currentThreshold}),
+                      );
+                    } catch (e) {}
+                    if (context.mounted) Navigator.pop(context);
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0F5132)),
+                  child: const Text('Save Changes', style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            );
+          }
+        );
+      }
     );
   }
 }

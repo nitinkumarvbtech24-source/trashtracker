@@ -45,6 +45,7 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
   String _selectedZoneFilter = 'All Zones';
   String _selectedWardFilter = 'All Wards';
   String _selectedStatusFilter = 'All Status';
+  int _mobileViewTab = 0; // 0: Map View, 1: Fleet List
 
   @override
   void initState() {
@@ -181,6 +182,7 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isMobile = MediaQuery.of(context).size.width < 768;
     final bool hasAllAccess = RoleService.hasAllAccess('Fleets & Routes');
     final List<String> allowedZones = RoleService.getAllowedZonesForModule('Fleets & Routes');
     final List<String> allowedWards = RoleService.getAllowedWardsForModule('Fleets & Routes');
@@ -346,87 +348,230 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
                ),
              )
           ),
-          Expanded(
-            child: Row(
-              children: [
-                // Left Sidebar
-                Container(
-                  width: 380,
-                  color: Colors.white,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                       Padding(
-                         padding: const EdgeInsets.all(24),
-                         child: Text('Registered Fleet (${filteredVehicles.length})', style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 16, color: const Color(0xFF111827))),
-                       ),
-                       Padding(
-                         padding: const EdgeInsets.symmetric(horizontal: 24),
-                         child: TextField(
-                           onChanged: (val) => setState(() => _searchQuery = val),
-                           style: GoogleFonts.inter(fontSize: 13),
-                           decoration: InputDecoration(
-                             hintText: 'Search fleet, ward or driver...',
-                             hintStyle: GoogleFonts.inter(color: const Color(0xFF9CA3AF), fontSize: 13),
-                             prefixIcon: const Icon(LucideIcons.search, size: 18, color: Color(0xFF9CA3AF)),
-                             suffixIcon: const Icon(LucideIcons.filter, size: 18, color: Color(0xFF9CA3AF)),
-                             contentPadding: const EdgeInsets.symmetric(vertical: 0),
-                             border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.grey.shade300)),
-                             enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.grey.shade300)),
-                             focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF0F5132))),
-                           ),
-                         )
-                       ),
-                       const SizedBox(height: 16),
-                       Expanded(
-                         child: ListView.builder(
-                           padding: const EdgeInsets.symmetric(horizontal: 24),
-                           itemCount: filteredVehicles.length,
-                           itemBuilder: (context, index) {
-                              final vehicle = filteredVehicles[index];
-                              return _buildVehicleCard(vehicle);
-                           }
-                         )
-                       ),
-                       // Pagination footer mock
-                       Container(
-                         padding: const EdgeInsets.all(24),
-                         decoration: BoxDecoration(border: Border(top: BorderSide(color: Colors.grey.shade200))),
-                         child: Column(
-                           crossAxisAlignment: CrossAxisAlignment.start,
-                           children: [
-                             Text('Showing 1 to ${filteredVehicles.length > 7 ? 7 : filteredVehicles.length} of ${_vehicles.length} fleets', style: GoogleFonts.inter(color: Colors.grey.shade600, fontSize: 12)),
-                             const SizedBox(height: 16),
-                             Row(
-                               children: [
-                                 _pageBtn(LucideIcons.chevronLeft, false),
-                                 _pageBtn('1', true),
-                                 _pageBtn('2', false),
-                                 _pageBtn('3', false),
-                                 const Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Text('...')),
-                                 _pageBtn('18', false),
-                                 _pageBtn(LucideIcons.chevronRight, false),
-                               ]
-                             )
-                           ]
-                         )
-                       )
-                    ]
-                  )
-                ),
-                // Map Area
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24.0),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(16),
-                      child: _buildMap(filteredVehicles),
+          if (isMobile)
+            Container(
+              color: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => setState(() => _mobileViewTab = 0),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        decoration: BoxDecoration(
+                          color: _mobileViewTab == 0 ? const Color(0xFF0F5132) : const Color(0xFFF3F4F6),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        alignment: Alignment.center,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(LucideIcons.map, size: 16, color: _mobileViewTab == 0 ? Colors.white : const Color(0xFF4B5563)),
+                            const SizedBox(width: 8),
+                            Text('Map View', style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 13, color: _mobileViewTab == 0 ? Colors.white : const Color(0xFF4B5563))),
+                          ],
+                        ),
+                      ),
                     ),
-                  )
-                ),
-              ]
-            )
-          )
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => setState(() => _mobileViewTab = 1),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        decoration: BoxDecoration(
+                          color: _mobileViewTab == 1 ? const Color(0xFF0F5132) : const Color(0xFFF3F4F6),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        alignment: Alignment.center,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(LucideIcons.truck, size: 16, color: _mobileViewTab == 1 ? Colors.white : const Color(0xFF4B5563)),
+                            const SizedBox(width: 8),
+                            Text('Fleet List (${filteredVehicles.length})', style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 13, color: _mobileViewTab == 1 ? Colors.white : const Color(0xFF4B5563))),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          Expanded(
+            child: isMobile
+                ? (_mobileViewTab == 0
+                    ? Stack(
+                        children: [
+                          Positioned.fill(
+                            child: Padding(
+                              padding: const EdgeInsets.all(12.0),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(16),
+                                child: _buildMap(filteredVehicles),
+                              ),
+                            ),
+                          ),
+                          if (_selectedVehicle != null)
+                            Positioned(
+                              left: 16,
+                              right: 16,
+                              bottom: 16,
+                              child: Container(
+                                padding: const EdgeInsets.all(14),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(color: Colors.grey.shade200),
+                                  boxShadow: [
+                                    BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 10, offset: const Offset(0, 4)),
+                                  ],
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(_selectedVehicle!.vehicleNumber, style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 15, color: const Color(0xFF111827))),
+                                          const SizedBox(height: 4),
+                                          Text('Ward: ${_selectedVehicle!.assignedWard}  •  ${_selectedVehicle!.driverName}', style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF6B7280))),
+                                        ],
+                                      ),
+                                    ),
+                                    ElevatedButton(
+                                      onPressed: () => _navigateToDetails(_selectedVehicle!),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: const Color(0xFF0F5132),
+                                        foregroundColor: Colors.white,
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                      ),
+                                      child: const Text('Details', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                        ],
+                      )
+                    : Container(
+                        color: Colors.white,
+                        child: Column(
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: TextField(
+                                onChanged: (val) => setState(() => _searchQuery = val),
+                                style: GoogleFonts.inter(fontSize: 13),
+                                decoration: InputDecoration(
+                                  hintText: 'Search fleet, ward or driver...',
+                                  hintStyle: GoogleFonts.inter(color: const Color(0xFF9CA3AF), fontSize: 13),
+                                  prefixIcon: const Icon(LucideIcons.search, size: 18, color: Color(0xFF9CA3AF)),
+                                  suffixIcon: const Icon(LucideIcons.filter, size: 18, color: Color(0xFF9CA3AF)),
+                                  contentPadding: const EdgeInsets.symmetric(vertical: 0),
+                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.grey.shade300)),
+                                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.grey.shade300)),
+                                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF0F5132))),
+                                ),
+                              ),
+                            ),
+                            Expanded(
+                              child: ListView.builder(
+                                padding: const EdgeInsets.symmetric(horizontal: 16),
+                                itemCount: filteredVehicles.length,
+                                itemBuilder: (context, index) {
+                                  final vehicle = filteredVehicles[index];
+                                  return _buildVehicleCard(vehicle);
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                      ))
+                : Row(
+                    children: [
+                      // Left Sidebar
+                      Container(
+                        width: 380,
+                        color: Colors.white,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.all(24),
+                              child: Text('Registered Fleet (${filteredVehicles.length})', style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 16, color: const Color(0xFF111827))),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 24),
+                              child: TextField(
+                                onChanged: (val) => setState(() => _searchQuery = val),
+                                style: GoogleFonts.inter(fontSize: 13),
+                                decoration: InputDecoration(
+                                  hintText: 'Search fleet, ward or driver...',
+                                  hintStyle: GoogleFonts.inter(color: const Color(0xFF9CA3AF), fontSize: 13),
+                                  prefixIcon: const Icon(LucideIcons.search, size: 18, color: Color(0xFF9CA3AF)),
+                                  suffixIcon: const Icon(LucideIcons.filter, size: 18, color: Color(0xFF9CA3AF)),
+                                  contentPadding: const EdgeInsets.symmetric(vertical: 0),
+                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.grey.shade300)),
+                                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.grey.shade300)),
+                                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF0F5132))),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            Expanded(
+                              child: ListView.builder(
+                                padding: const EdgeInsets.symmetric(horizontal: 24),
+                                itemCount: filteredVehicles.length,
+                                itemBuilder: (context, index) {
+                                  final vehicle = filteredVehicles[index];
+                                  return _buildVehicleCard(vehicle);
+                                },
+                              ),
+                            ),
+                            // Pagination footer mock
+                            Container(
+                              padding: const EdgeInsets.all(24),
+                              decoration: BoxDecoration(border: Border(top: BorderSide(color: Colors.grey.shade200))),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('Showing 1 to ${filteredVehicles.length > 7 ? 7 : filteredVehicles.length} of ${_vehicles.length} fleets', style: GoogleFonts.inter(color: Colors.grey.shade600, fontSize: 12)),
+                                  const SizedBox(height: 16),
+                                  Row(
+                                    children: [
+                                      _pageBtn(LucideIcons.chevronLeft, false),
+                                      _pageBtn('1', true),
+                                      _pageBtn('2', false),
+                                      _pageBtn('3', false),
+                                      const Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Text('...')),
+                                      _pageBtn('18', false),
+                                      _pageBtn(LucideIcons.chevronRight, false),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // Map Area
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24.0),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(16),
+                            child: _buildMap(filteredVehicles),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
         ]
       )
     );

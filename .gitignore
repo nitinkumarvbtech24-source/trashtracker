@@ -34,6 +34,14 @@ ENV/
 captured_images/
 dataset/
 *.csv
+*.zip
+snapshots/
+runs/
+Garbage_ai_model_v6/snapshots/
+Garbage_ai_model_v6/runs/
+Garbage_ai_model_v6/weights/
+Garbage_ai_model_v6/*.pt
+Garbage_ai_model_v6/*.zip
 
 # Flutter/Dart
 .dart_tool/

@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pravaham | Garbage AI v6 - Road Trash Detection & Analytics</title>
+    <meta name="description" content="Real-time urban road trash detection dashboard powered by Garbage AI v6 (YOLOv8m). Upload road images for instant AI analysis.">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+    <!-- Header Navigation -->
+    <header class="navbar">
+        <div class="brand-container">
+            <div class="brand-icon">🗑️</div>
+            <div>
+                <span class="brand-title">Pravaham AI</span>
+                <span class="brand-badge">Garbage AI v6</span>
+            </div>
+        </div>
+        <div class="model-status">
+            <div class="status-pulse"></div>
+            <span>YOLOv8m Active &bull; RTX 4060 GPU</span>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="container">
+
+        <!-- Top Overview Metric Cards -->
+        <section class="metrics-grid">
+            <div class="metric-card blue">
+                <div class="metric-icon">🔍</div>
+                <div class="metric-info">
+                    <div class="label">Total Dashboard Scans</div>
+                    <div class="value" id="globalScans">0</div>
+                </div>
+            </div>
+
+            <div class="metric-card green">
+                <div class="metric-icon">🗑️</div>
+                <div class="metric-info">
+                    <div class="label">Total Trash Objects Found</div>
+                    <div class="value" id="globalDetections">0</div>
+                </div>
+            </div>
+
+            <div class="metric-card purple">
+                <div class="metric-icon">⚡</div>
+                <div class="metric-info">
+                    <div class="label">Average Inference Latency</div>
+                    <div class="value" id="inferenceTime">-- ms</div>
+                </div>
+            </div>
+
+            <div class="metric-card amber">
+                <div class="metric-icon">🎯</div>
+                <div class="metric-info">
+                    <div class="label">Model mAP @ 50</div>
+                    <div class="value">47.8%</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Main Workbench Section -->
+        <section class="workbench-grid">
+
+            <!-- Control Panel (Upload & Controls) -->
+            <div class="panel-card">
+                <h2 class="panel-header">Upload & Analyze</h2>
+                
+                <!-- Dropzone Drag & Drop -->
+                <div class="dropzone" id="dropzone">
+                    <div class="dropzone-icon">📷</div>
+                    <div class="dropzone-title">Drag & Drop Road Image Here</div>
+                    <div class="dropzone-sub">Supports JPG, PNG, WEBP, BMP</div>
+                    <div class="browse-btn">Browse Files</div>
+                    <input type="file" id="fileInput" accept="image/*">
+                </div>
+
+                <!-- Confidence Threshold Slider -->
+                <div class="slider-group">
+                    <div class="slider-label">
+                        <span>Detection Confidence Threshold</span>
+                        <span id="confidenceValue">25%</span>
+                    </div>
+                    <input type="range" id="confidenceSlider" min="0.10" max="0.90" step="0.05" value="0.25">
+                </div>
+
+                <!-- Action Button -->
+                <button class="btn-analyze" id="btnAnalyze">
+                    <div class="spinner" id="spinner"></div>
+                    <span>Analyze Image with AI</span>
+                </button>
+
+                <!-- Pre-loaded Test Samples -->
+                <div class="samples-section">
+                    <div class="samples-title">Or Try Sample Test Images</div>
+                    <div class="samples-grid" id="samplesGrid">
+                        <!-- Loaded dynamically via JS -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Results & Analytics Display -->
+            <div class="results-display">
+
+                <!-- Side-by-Side Image Comparison -->
+                <div class="image-comparison-grid">
+                    <!-- Original Upload -->
+                    <div class="image-box">
+                        <div class="image-box-header">
+                            <span>Original Road Image</span>
+                            <span style="color: var(--text-muted);">Input</span>
+                        </div>
+                        <div class="image-preview-container">
+                            <div class="placeholder-text" id="origPlaceholder">
+                                <span style="font-size: 32px;">🖼️</span>
+                                <span>No Image Selected</span>
+                            </div>
+                            <img id="origImage" style="display: none;" alt="Original Upload">
+                        </div>
+                    </div>
+
+                    <!-- AI Detection Overlay -->
+                    <div class="image-box">
+                        <div class="image-box-header">
+                            <span>Garbage AI v6 Detection Overlay</span>
+                            <span style="color: #34d399;">YOLOv8 Output</span>
+                        </div>
+                        <div class="image-preview-container">
+                            <div class="placeholder-text" id="resultPlaceholder">
+                                <span style="font-size: 32px;">🤖</span>
+                                <span>Click "Analyze Image" to view AI detections</span>
+                            </div>
+                            <img id="resultImage" style="display: none;" alt="AI Detection Result">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Analytics Breakdown Panel -->
+                <div class="analysis-card">
+                    <div class="risk-banner emerald" id="riskBanner">
+                        <div>
+                            <div class="risk-level-title" id="riskTitle">Status: Ready for Analysis</div>
+                            <div class="risk-recommendation" id="riskRec">Upload or choose a road image to detect trash and evaluate contamination risk.</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="font-size: 26px; font-weight: 800;" id="totalTrash">0</div>
+                            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">Trash Detected</div>
+                        </div>
+                    </div>
+
+                    <!-- Summary Grid -->
+                    <div style="display: flex; gap: 20px; margin-bottom: 20px; color: var(--text-muted); font-size: 13px;">
+                        <div>Average Confidence: <strong style="color: var(--text-main);" id="avgConf">--%</strong></div>
+                    </div>
+
+                    <!-- Detailed Detections Table -->
+                    <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 10px;">Detected Trash Bounding Boxes</h3>
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Detected Class</th>
+                                    <th>Confidence</th>
+                                    <th>Bounding Box [x1, y1, x2, y2]</th>
+                                </tr>
+                            </thead>
+                            <tbody id="detectionsTableBody">
+                                <tr>
+                                    <td colspan="4" style="text-align: center; color: var(--text-muted); padding: 20px;">
+                                        No analysis performed yet.
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+            </div>
+
+        </section>
+
+    </main>
+
+    <script src="/static/js/main.js"></script>
+</body>
+</html>

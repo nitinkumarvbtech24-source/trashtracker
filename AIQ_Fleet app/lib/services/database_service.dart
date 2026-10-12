@@ -50,6 +50,18 @@ class DatabaseService {
             timestamp INTEGER
           )
         ''');
+
+        await db.execute('''
+          CREATE TABLE local_flags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filePath TEXT,
+            roadStatus TEXT,
+            confidence REAL,
+            timestamp INTEGER,
+            lat REAL,
+            lng REAL
+          )
+        ''');
       },
       );
     } catch (e) {
@@ -141,5 +153,29 @@ class DatabaseService {
     if (db != null) {
       await db.delete('video_chunks', where: 'id = ?', whereArgs: [id]);
     }
+  }
+
+  Future<void> insertLocalFlag(String filePath, String roadStatus, double confidence, int timestamp, double lat, double lng) async {
+    if (_isWeb) return;
+    final db = await database;
+    if (db != null) {
+      await db.insert('local_flags', {
+        'filePath': filePath,
+        'roadStatus': roadStatus,
+        'confidence': confidence,
+        'timestamp': timestamp,
+        'lat': lat,
+        'lng': lng,
+      });
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getLocalFlags() async {
+    if (_isWeb) return [];
+    final db = await database;
+    if (db != null) {
+      return await db.query('local_flags', orderBy: 'timestamp DESC');
+    }
+    return [];
   }
 }

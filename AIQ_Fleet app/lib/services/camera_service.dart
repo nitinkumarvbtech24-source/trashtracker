@@ -663,8 +663,40 @@ class CameraService extends ChangeNotifier {
             'road_confidence': confidence
           };
           
+          // Download annotated image or fallback to raw
+          try {
+            List<int> imageToSave = bytes; // fallback raw
+            if (imageUrl != null) {
+              final annotatedResponse = await http.get(Uri.parse('$activeGarbageAiUrl$imageUrl'), headers: {'ngrok-skip-browser-warning': 'true'}).timeout(const Duration(seconds: 15));
+              if (annotatedResponse.statusCode == 200) {
+                imageToSave = annotatedResponse.bodyBytes;
+              }
+            }
+
+            final directory = await getApplicationDocumentsDirectory();
+            final dateStr = DateTime.now().toIso8601String().split('T')[0];
+            final timestampStr = DateTime.now().millisecondsSinceEpoch.toString();
+            final fileName = "$timestampStr.jpg";
+            final localFolder = Directory('${directory.path}/local_flags/$dateStr');
+            if (!await localFolder.exists()) {
+              await localFolder.create(recursive: true);
+            }
+            final localFile = File('${localFolder.path}/$fileName');
+            await localFile.writeAsBytes(imageToSave);
+            
+            // Save to gallery
+            final hasAccess = await Gal.hasAccess(toAlbum: true);
+            if (!hasAccess) await Gal.requestAccess(toAlbum: true);
+            await Gal.putImage(localFile.path, album: 'AIQ_Fleet_$dateStr');
+            
+            // Insert to local database
+            DatabaseService().insertLocalFlag(localFile.path, roadStatus, confidence, DateTime.now().millisecondsSinceEpoch, lat, lng);
+          } catch (e) {
+            debugPrint("Error downloading/saving annotated image: $e");
+          }
+          
           if (imageUrl != null) {
-            if (roadStatus == 'Very Dirty Road' || roadStatus == 'Slightly Dirty Road') {
+            if (roadStatus == 'Trash Detected' || roadStatus == 'Very Dirty Road' || roadStatus == 'Slightly Dirty Road') {
               try {
                 await FirebaseFirestore.instance.collection('trash_spots').add({
                   'lat': lat,

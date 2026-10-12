@@ -261,6 +261,7 @@ class _FleetScreenState extends State<FleetScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isMobile = MediaQuery.of(context).size.width < 768;
     return Scaffold(
       backgroundColor: const Color(0xFFF9FAFB),
       body: Column(
@@ -270,12 +271,12 @@ class _FleetScreenState extends State<FleetScreen> {
           // Main Content Area
           Expanded(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
+              padding: EdgeInsets.symmetric(horizontal: isMobile ? 12.0 : 24.0, vertical: 16.0),
               child: Column(
                 children: [
-                  _buildKPIs(),
+                  _buildKPIs(isMobile),
                   const SizedBox(height: 24),
-                  if (_bottomNavIndex == 0) _buildFleetsAndRoutesView(),
+                  if (_bottomNavIndex == 0) _buildFleetsAndRoutesView(isMobile),
                   if (_bottomNavIndex == 1) _buildDevicesView(),
                   if (_bottomNavIndex == 2) const Center(child: Padding(padding: EdgeInsets.all(40), child: Text("Analytics (Coming Soon)"))),
                 ],
@@ -484,7 +485,36 @@ class _FleetScreenState extends State<FleetScreen> {
     );
   }
 
-  Widget _buildKPIs() {
+  Widget _buildKPIs([bool isMobile = false]) {
+    if (isMobile) {
+      return Column(
+        children: [
+          Row(
+            children: [
+              Expanded(child: _buildKPICard('ACTIVE FLEET', '4,287', '77.95% Total', LucideIcons.truck, const Color(0xFF10B981), isMobile: true)),
+              const SizedBox(width: 10),
+              Expanded(child: _buildKPICard('ROUTES COMPLETED', '1,203', 'Today', LucideIcons.mapPin, const Color(0xFF3B82F6), subtitleColor: const Color(0xFF3B82F6), isMobile: true)),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(child: _buildKPICard('DISTANCE COVERED', '12,842 km', 'Today', LucideIcons.checkCircle, const Color(0xFF8B5CF6), subtitleColor: const Color(0xFF8B5CF6), isMobile: true)),
+              const SizedBox(width: 10),
+              Expanded(child: _buildKPICard('AVG. EFFICIENCY', '86%', '+4% vs Yday', LucideIcons.trendingUp, const Color(0xFFF59E0B), subtitleColor: const Color(0xFFF59E0B), isMobile: true)),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(child: _buildKPICard('ON TIME RATE', '92%', '+6% vs Yday', LucideIcons.clock, const Color(0xFF10B981), subtitleColor: const Color(0xFF10B981), isMobile: true)),
+              const SizedBox(width: 10),
+              Expanded(child: _buildKPICard('NEEDS REPAIR', '68', '3.87% Total', LucideIcons.wrench, const Color(0xFFEF4444), subtitleColor: const Color(0xFFEF4444), isMobile: true)),
+            ],
+          ),
+        ],
+      );
+    }
     return Row(
       children: [
         Expanded(child: _buildKPICard('ACTIVE VEHICLES', '4,287', '77.95% of Total', LucideIcons.truck, const Color(0xFF10B981))),
@@ -502,36 +532,67 @@ class _FleetScreenState extends State<FleetScreen> {
     );
   }
 
-  Widget _buildKPICard(String title, String value, String subtitle, IconData icon, Color iconColor, {Color subtitleColor = const Color(0xFF10B981)}) {
+  Widget _buildKPICard(String title, String value, String subtitle, IconData icon, Color iconColor, {Color subtitleColor = const Color(0xFF10B981), bool isMobile = false}) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      height: isMobile ? 85 : 100,
+      padding: EdgeInsets.symmetric(horizontal: isMobile ? 10 : 16, vertical: isMobile ? 8 : 16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-        boxShadow: const [BoxShadow(color: Color(0x0A000000), blurRadius: 4, offset: Offset(0, 2))],
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: const [BoxShadow(color: Color(0x05000000), blurRadius: 4, offset: Offset(0, 2))],
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Container(
-            width: 48, height: 48,
+            width: isMobile ? 36 : 48,
+            height: isMobile ? 36 : 48,
             decoration: BoxDecoration(
-              color: iconColor.withValues(alpha: 0.1),
-              shape: BoxShape.circle,
+              color: iconColor.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(10),
             ),
-            child: Icon(icon, color: iconColor, size: 24),
+            child: Icon(icon, color: iconColor, size: isMobile ? 18 : 24),
           ),
-          const SizedBox(width: 16),
+          SizedBox(width: isMobile ? 8 : 16),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Text(title, style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.bold, color: const Color(0xFF4B5563), letterSpacing: 0.5)),
-                const SizedBox(height: 4),
-                Text(value, style: GoogleFonts.inter(fontSize: 24, fontWeight: FontWeight.w800, color: const Color(0xFF111827))),
-                const SizedBox(height: 2),
-                Text(subtitle, style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w700, color: subtitleColor)),
+                Text(
+                  title,
+                  style: GoogleFonts.inter(
+                    fontSize: isMobile ? 9 : 10,
+                    fontWeight: FontWeight.bold,
+                    color: const Color(0xFF4B5563),
+                    letterSpacing: 0.3,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                SizedBox(height: isMobile ? 2 : 4),
+                Text(
+                  value,
+                  style: GoogleFonts.inter(
+                    fontSize: isMobile ? 18 : 24,
+                    fontWeight: FontWeight.w800,
+                    color: const Color(0xFF111827),
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                SizedBox(height: isMobile ? 1 : 2),
+                Text(
+                  subtitle,
+                  style: GoogleFonts.inter(
+                    fontSize: isMobile ? 9 : 11,
+                    fontWeight: FontWeight.w700,
+                    color: subtitleColor,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ],
             ),
           ),
@@ -540,7 +601,22 @@ class _FleetScreenState extends State<FleetScreen> {
     );
   }
 
-  Widget _buildFleetsAndRoutesView() {
+  Widget _buildFleetsAndRoutesView([bool isMobile = false]) {
+    if (isMobile) {
+      return Column(
+        children: [
+          SizedBox(
+            height: 380,
+            child: _buildMapPanel(),
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 480,
+            child: _buildVehicleListPanel(isMobile: true),
+          ),
+        ],
+      );
+    }
     return SizedBox(
       height: 650,
       child: Row(
@@ -554,7 +630,7 @@ class _FleetScreenState extends State<FleetScreen> {
     );
   }
 
-  Widget _buildVehicleListPanel() {
+  Widget _buildVehicleListPanel({bool isMobile = false}) {
     List<Vehicle> filteredList = _filteredVehicles.where((v) {
       bool matchesSearch = _searchQuery.isEmpty || v.vehicleNumber.toLowerCase().contains(_searchQuery.toLowerCase()) || (v.driverName.toLowerCase()).contains(_searchQuery.toLowerCase());
       return matchesSearch;
@@ -564,8 +640,8 @@ class _FleetScreenState extends State<FleetScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-        boxShadow: const [BoxShadow(color: Color(0x0A000000), blurRadius: 4, offset: Offset(0, 2))],
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: const [BoxShadow(color: Color(0x05000000), blurRadius: 4, offset: Offset(0, 2))],
       ),
       child: Column(
         children: [
@@ -585,13 +661,14 @@ class _FleetScreenState extends State<FleetScreen> {
                 Row(
                   children: [
                     Container(
-                      width: 180, height: 36,
+                      width: isMobile ? 130 : 180,
+                      height: 36,
                       decoration: BoxDecoration(border: Border.all(color: const Color(0xFFE5E7EB)), borderRadius: BorderRadius.circular(8)),
                       child: TextField(
                         onChanged: (val) => setState(() => _searchQuery = val),
                         style: GoogleFonts.inter(fontSize: 13),
                         decoration: const InputDecoration(
-                          hintText: 'Search vehicle...',
+                          hintText: 'Search...',
                           hintStyle: TextStyle(color: Color(0xFF9CA3AF), fontSize: 13),
                           border: InputBorder.none,
                           prefixIcon: Icon(LucideIcons.search, size: 16, color: Color(0xFF9CA3AF)),
@@ -611,19 +688,21 @@ class _FleetScreenState extends State<FleetScreen> {
             ),
           ),
           const Divider(height: 1, color: Color(0xFFE5E7EB)),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            child: Row(
-              children: [
-                Expanded(flex: 3, child: Text('Vehicle ID', style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: const Color(0xFF6B7280)))),
-                Expanded(flex: 2, child: Text('Driver', style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: const Color(0xFF6B7280)))),
-                Expanded(flex: 2, child: Text('Ward / Zone', style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: const Color(0xFF6B7280)))),
-                Expanded(flex: 2, child: Text('Status', style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: const Color(0xFF6B7280)))),
-                Expanded(flex: 2, child: Text('Last Updated', style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: const Color(0xFF6B7280)))),
-              ],
+          if (!isMobile)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                children: [
+                  Expanded(flex: 3, child: Text('Vehicle ID', style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: const Color(0xFF6B7280)))),
+                  Expanded(flex: 2, child: Text('Driver', style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: const Color(0xFF6B7280)))),
+                  Expanded(flex: 2, child: Text('Ward / Zone', style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: const Color(0xFF6B7280)))),
+                  Expanded(flex: 2, child: Text('Status', style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: const Color(0xFF6B7280)))),
+                  Expanded(flex: 2, child: Text('Last Updated', style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: const Color(0xFF6B7280)))),
+                ],
+              ),
             ),
-          ),
-          const Divider(height: 1, color: Color(0xFFE5E7EB)),
+          if (!isMobile)
+            const Divider(height: 1, color: Color(0xFFE5E7EB)),
           Expanded(
             child: ListView.separated(
               itemCount: filteredList.length,
@@ -647,6 +726,43 @@ class _FleetScreenState extends State<FleetScreen> {
                 if (v.lastHeartbeat != null) {
                   int mins = DateTime.now().difference(v.lastHeartbeat!).inMinutes;
                   timeAgo = mins < 60 ? '$mins min ago' : '${mins~/60} hr ago';
+                }
+
+                if (isMobile) {
+                  return InkWell(
+                    onTap: () {
+                      setState(() => _selectedVehicle = v);
+                      if (v.currentLocation != null) _mapController.move(v.currentLocation!, 15.0);
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(8)),
+                            child: const Icon(LucideIcons.truck, size: 18, color: Color(0xFF4B5563)),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(v.vehicleNumber, style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 13, color: const Color(0xFF111827))),
+                                const SizedBox(height: 2),
+                                Text('${v.driverName} • ${v.assignedWard}', style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF6B7280))),
+                              ],
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(color: statusBg, borderRadius: BorderRadius.circular(6)),
+                            child: Text(status, style: GoogleFonts.inter(color: statusColor, fontSize: 10, fontWeight: FontWeight.bold)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
                 }
 
                 return InkWell(

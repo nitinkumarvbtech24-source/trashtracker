@@ -92,6 +92,11 @@ async def options_snapshots():
 
 @app.get("/api/snapshots")
 async def get_snapshots():
+    for s in recent_snapshots:
+        if "raw_image_url" not in s:
+            s["raw_image_url"] = s.get("image_url")
+        if "training_tag" not in s:
+            s["training_tag"] = s.get("display_class", s.get("road_status", "Good Road"))
     return JSONResponse(status_code=200, content={"snapshots": recent_snapshots})
 
 @app.post("/process_frame")
@@ -112,6 +117,9 @@ async def process_frame_route(request: Request, background_tasks: BackgroundTask
         
         if frame is None:
             return JSONResponse(status_code=400, content={"error": "Invalid image"})
+
+        # Preserve unannotated raw copy for training dataset
+        raw_frame = frame.copy()
 
         frame_height, frame_width = frame.shape[:2]
         frame_area = frame_height * frame_width
@@ -173,19 +181,30 @@ async def process_frame_route(request: Request, background_tasks: BackgroundTask
                 elif cls_id == 1:
                     conf_good_road = max(conf_good_road, conf)
 
-        overall_status = "Good Condition"
+        overall_status = "Good Road"
+        cat_folder = "good_road"
         if conf_pothole >= 0.50:
             overall_status = "Pothole Detected"
+            cat_folder = "pothole_detected"
         elif conf_bad_road > conf_good_road and conf_bad_road >= 0.55:
             overall_status = "Bad Road"
+            cat_folder = "bad_road"
             
-        filename_only = f"event_{int(time.time())}.jpg"
-        filename = f"detections/{filename_only}"
-        cv2.imwrite(filename, frame)
+        timestamp_sec = int(time.time())
+        filename_only = f"event_{timestamp_sec}.jpg"
+        raw_filename_only = f"raw_event_{timestamp_sec}.jpg"
         
-        # Only notify the temporary python backend for the dashboard if needed
-        # (Skipping external notification for /process_frame to avoid spam, or we can add it)
+        analysed_dir = f"detections/analysed/{cat_folder}"
+        training_dir = f"detections/training/{cat_folder}"
+        os.makedirs(analysed_dir, exist_ok=True)
+        os.makedirs(training_dir, exist_ok=True)
 
+        # 1. Save annotated frame
+        cv2.imwrite(f"{analysed_dir}/{filename_only}", frame)
+
+        # 2. Save pure unannotated raw frame
+        cv2.imwrite(f"{training_dir}/{raw_filename_only}", raw_frame)
+        
         snapshot_data = {
             "vehicle_number": data.get('vehicle_number', 'Unknown'),
             "ward": data.get('ward', 'Unknown'),
@@ -193,8 +212,10 @@ async def process_frame_route(request: Request, background_tasks: BackgroundTask
             "lng": longitude,
             "display_class": overall_status,
             "road_status": overall_status,
+            "training_tag": overall_status,
             "confidence": 1.0,
-            "image_url": f"/detections/{filename_only}",
+            "image_url": f"/detections/analysed/{cat_folder}/{filename_only}",
+            "raw_image_url": f"/detections/training/{cat_folder}/{raw_filename_only}",
             "timestamp": filename_only.replace('.jpg', '')
         }
         recent_snapshots.insert(0, snapshot_data)
@@ -202,7 +223,8 @@ async def process_frame_route(request: Request, background_tasks: BackgroundTask
 
         return JSONResponse(status_code=200, content={
             "road_status": overall_status,
-            "image_url": f"/detections/{filename_only}"
+            "image_url": f"/detections/{filename_only}",
+            "raw_image_url": f"/detections/{raw_filename_only}"
         })
         
     except Exception as e:
