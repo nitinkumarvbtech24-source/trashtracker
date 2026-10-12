@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 import os
 import uuid
 from datetime import datetime
+from contextlib import asynccontextmanager
 from ultralytics import YOLO
 import uvicorn
 
@@ -20,7 +21,13 @@ BASE_DIR = Path(__file__).parent
 YOLO_MODEL_PATH = BASE_DIR / "weights" / "garbage_ai_model_v6_best.pt"
 RAW_DIR = BASE_DIR / "road cleanliness"
 
-app = FastAPI(title="Street AIQ — Real-Time YOLOv8 Road Trash Detection Dashboard (v6)")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_yolo()
+    organize_existing_snapshots()
+    yield
+
+app = FastAPI(title="Street AIQ — Real-Time YOLOv8 Road Trash Detection Dashboard (v6)", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -118,11 +125,6 @@ def init_yolo():
     else:
         print("Fallback: Loading default yolov8n.pt model...")
         yolo_model = YOLO("yolov8n.pt")
-
-@app.on_event("startup")
-def startup_event():
-    init_yolo()
-    organize_existing_snapshots()
 
 def detect_road_trash(img_bytes):
     global current_confidence
