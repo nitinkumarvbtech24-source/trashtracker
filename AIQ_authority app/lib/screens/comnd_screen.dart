@@ -29,7 +29,7 @@ class _ComndScreenState extends State<ComndScreen> {
   String _vehicleStatusFilter = 'All'; // 'All', 'Flagged', 'Deflagged'
   String _vehicleSelectedZone = 'All Zones';
   String _vehicleSelectedWard = 'All Wards';
-  bool _isVehicleMapView = false;
+  String _vehicleViewMode = 'both'; // 'both' (Map & List together), 'list', 'map'
 
   // Search & Filters for Complaints from Users
   String _complaintSearchQuery = '';
@@ -275,7 +275,7 @@ class _ComndScreenState extends State<ComndScreen> {
   Widget _buildFlagsByVehiclesView(bool isMobile) {
     final allowedZones = RoleService.getAllowedZonesForModule('COM&D');
     final allowedWards = RoleService.getAllowedWardsForModule('COM&D');
-    final hasAllAccess = RoleService.hasAllAccess('COM&D');
+    final hasAllAccess = RoleService.hasAllAccess('COM&D') || (allowedZones.isEmpty && allowedWards.isEmpty);
 
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance.collection('trash_spots').snapshots(),
@@ -413,7 +413,7 @@ class _ComndScreenState extends State<ComndScreen> {
                           ),
                         ),
                         const SizedBox(width: 10),
-                        // View Toggle
+                        // View Toggle: Split, List, Map
                         Container(
                           decoration: BoxDecoration(
                             color: const Color(0xFFF1F5F9),
@@ -423,14 +423,31 @@ class _ComndScreenState extends State<ComndScreen> {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               IconButton(
-                                onPressed: () => setState(() => _isVehicleMapView = false),
-                                icon: Icon(LucideIcons.list, color: !_isVehicleMapView ? const Color(0xFF0F5132) : const Color(0xFF94A3B8), size: 18),
-                                tooltip: 'List View',
+                                onPressed: () {
+                                  setState(() => _vehicleViewMode = 'both');
+                                  if (displayedFlags.isNotEmpty) {
+                                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                                      try {
+                                        final firstLat = ((displayedFlags.first['lat'] ?? 13.0568) as num).toDouble();
+                                        final firstLng = ((displayedFlags.first['lng'] ?? 77.5027) as num).toDouble();
+                                        _vehicleMapController.move(LatLng(firstLat, firstLng), 13.5);
+                                      } catch (_) {}
+                                    });
+                                  }
+                                },
+                                icon: Icon(LucideIcons.columns, color: _vehicleViewMode == 'both' ? const Color(0xFF0F5132) : const Color(0xFF94A3B8), size: 18),
+                                tooltip: 'Map & List (Split)',
+                                constraints: const BoxConstraints(minWidth: 38, minHeight: 38),
+                              ),
+                              IconButton(
+                                onPressed: () => setState(() => _vehicleViewMode = 'list'),
+                                icon: Icon(LucideIcons.list, color: _vehicleViewMode == 'list' ? const Color(0xFF0F5132) : const Color(0xFF94A3B8), size: 18),
+                                tooltip: 'List View Only',
                                 constraints: const BoxConstraints(minWidth: 38, minHeight: 38),
                               ),
                               IconButton(
                                 onPressed: () {
-                                  setState(() => _isVehicleMapView = true);
+                                  setState(() => _vehicleViewMode = 'map');
                                   if (displayedFlags.isNotEmpty) {
                                     WidgetsBinding.instance.addPostFrameCallback((_) {
                                       try {
@@ -441,8 +458,8 @@ class _ComndScreenState extends State<ComndScreen> {
                                     });
                                   }
                                 },
-                                icon: Icon(LucideIcons.map, color: _isVehicleMapView ? const Color(0xFF0F5132) : const Color(0xFF94A3B8), size: 18),
-                                tooltip: 'Map View',
+                                icon: Icon(LucideIcons.map, color: _vehicleViewMode == 'map' ? const Color(0xFF0F5132) : const Color(0xFF94A3B8), size: 18),
+                                tooltip: 'Map View Only',
                                 constraints: const BoxConstraints(minWidth: 38, minHeight: 38),
                               ),
                             ],
@@ -513,11 +530,37 @@ class _ComndScreenState extends State<ComndScreen> {
 
             const SizedBox(height: 10),
 
-            // Content Area: List or Map
+            // Content Area: Map and/or List
             Expanded(
-              child: _isVehicleMapView
+              child: _vehicleViewMode == 'map'
                   ? _buildVehicleMapView(displayedFlags)
-                  : _buildVehicleListView(displayedFlags, isMobile),
+                  : (_vehicleViewMode == 'list'
+                      ? _buildVehicleListView(displayedFlags, isMobile)
+                      : (isMobile
+                          ? Column(
+                              children: [
+                                SizedBox(
+                                  height: 250,
+                                  child: _buildVehicleMapView(displayedFlags),
+                                ),
+                                const SizedBox(height: 8),
+                                Expanded(child: _buildVehicleListView(displayedFlags, isMobile)),
+                              ],
+                            )
+                          : Row(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Expanded(
+                                  flex: 5,
+                                  child: _buildVehicleMapView(displayedFlags),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  flex: 5,
+                                  child: _buildVehicleListView(displayedFlags, isMobile),
+                                ),
+                              ],
+                            ))),
             ),
           ],
         );
@@ -604,9 +647,16 @@ class _ComndScreenState extends State<ComndScreen> {
             side: BorderSide(color: isDeflagged ? const Color(0xFF10B981).withOpacity(0.4) : const Color(0xFFEF4444).withOpacity(0.35), width: 1.5),
           ),
           elevation: 2,
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Row(
+          child: InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: () {
+              try {
+                _vehicleMapController.move(LatLng(lat, lng), 15.0);
+              } catch (_) {}
+            },
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // Thumbnail with click-to-preview
@@ -766,9 +816,25 @@ class _ComndScreenState extends State<ComndScreen> {
 
                       const SizedBox(height: 12),
 
-                      // Actions Row: Directions & Deflag
+                      // Actions Row: Map Pin, Directions & Deflag
                       Row(
                         children: [
+                          OutlinedButton.icon(
+                            onPressed: () {
+                              try {
+                                _vehicleMapController.move(LatLng(lat, lng), 15.0);
+                              } catch (_) {}
+                            },
+                            icon: const Icon(LucideIcons.mapPin, size: 14),
+                            label: const Text('Map Pin', style: TextStyle(fontSize: 12)),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: const Color(0xFF2563EB),
+                              side: const BorderSide(color: Color(0xFF2563EB)),
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
                           OutlinedButton.icon(
                             onPressed: () => _openMaps(lat, lng),
                             icon: const Icon(LucideIcons.navigation, size: 14),
@@ -780,7 +846,7 @@ class _ComndScreenState extends State<ComndScreen> {
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                             ),
                           ),
-                          const SizedBox(width: 10),
+                          const SizedBox(width: 8),
                           if (!isDeflagged) ...[
                             ElevatedButton.icon(
                               onPressed: () {
@@ -838,6 +904,7 @@ class _ComndScreenState extends State<ComndScreen> {
               ],
             ),
           ),
+          ),
         );
       },
     );
@@ -883,8 +950,8 @@ class _ComndScreenState extends State<ComndScreen> {
           ),
           children: [
             TileLayer(
-              urlTemplate: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-              subdomains: const ['a', 'b', 'c'],
+              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+              userAgentPackageName: 'com.nitin.trashtracker',
             ),
             MarkerLayer(
               markers: clusters.map<Marker>((cluster) {
