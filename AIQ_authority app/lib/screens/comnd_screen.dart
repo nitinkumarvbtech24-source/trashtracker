@@ -9,6 +9,7 @@ import '../widgets/ngrok_image.dart';
 import 'comnd_deflag_screen.dart';
 import '../constants.dart';
 import '../widgets/trash_pinpoint_marker.dart';
+import '../services/ward_zone_service.dart';
 
 class ComndScreen extends StatefulWidget {
   const ComndScreen({super.key});
@@ -42,7 +43,19 @@ class _ComndScreenState extends State<ComndScreen> {
   @override
   void initState() {
     super.initState();
+    WardZoneService.instance.init();
+    WardZoneService.instance.notifier.addListener(_onWardZoneUpdate);
     _fetchZonesAndWards();
+  }
+
+  void _onWardZoneUpdate() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
+    super.dispose();
   }
 
   Future<void> _fetchZonesAndWards() async {
@@ -952,6 +965,10 @@ class _ComndScreenState extends State<ComndScreen> {
             TileLayer(
               urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
               userAgentPackageName: 'com.nitin.trashtracker',
+            ),
+            ...WardZoneService.instance.buildLayers(
+              selectedZone: _vehicleSelectedZone,
+              selectedWard: _vehicleSelectedWard,
             ),
             MarkerLayer(
               markers: clusters.map<Marker>((cluster) {

@@ -12,6 +12,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/map_cache_service.dart';
 import 'services/role_service.dart';
+import 'services/ward_zone_service.dart';
 import 'constants.dart';
 
 void main() async {
@@ -20,6 +21,7 @@ void main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
   await MapCacheService.init();
+  WardZoneService.instance.init();
 
   final prefs = await SharedPreferences.getInstance();
   final savedUrl = prefs.getString('garbage_ai_url');

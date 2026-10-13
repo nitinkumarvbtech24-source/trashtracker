@@ -16,6 +16,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../constants.dart';
 import '../widgets/trash_pinpoint_marker.dart';
+import '../services/ward_zone_service.dart';
 
 class GarbageSpotsScreen extends StatefulWidget {
   const GarbageSpotsScreen({super.key});
@@ -44,12 +45,19 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
   @override
   void initState() {
     super.initState();
+    WardZoneService.instance.init();
+    WardZoneService.instance.notifier.addListener(_onWardZoneUpdate);
     _fetchGarbageFlags();
     _fetchZonesAndWards();
   }
 
+  void _onWardZoneUpdate() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
+    WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
     _zonesSub?.cancel();
     _wardsSub?.cancel();
     _mapController.dispose();
@@ -425,6 +433,10 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
               TileLayer(
                 urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.nitin.trashtracker',
+              ),
+              ...WardZoneService.instance.buildLayers(
+                selectedZone: _filterZone,
+                selectedWard: _filterWard,
               ),
               Builder(
                 builder: (context) {

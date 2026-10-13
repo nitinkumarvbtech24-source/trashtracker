@@ -16,10 +16,10 @@ import '../models/vehicle.dart';
 import '../models/ward.dart';
 import '../constants.dart';
 import '../widgets/ngrok_image.dart';
-import 'cleanliness_screen.dart';
 import '../models/garbage_flag.dart';
 import 'database_screen.dart';
 import '../widgets/trash_pinpoint_marker.dart';
+import '../services/ward_zone_service.dart';
 
 class VehicleDetailsScreen extends StatefulWidget {
   final Vehicle vehicle;
@@ -56,6 +56,8 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
   @override
   void initState() {
     super.initState();
+    WardZoneService.instance.init();
+    WardZoneService.instance.notifier.addListener(_onWardZoneUpdate);
     _liveVehicle = widget.vehicle;
     _fetchDailyStats();
     _fetchGarbageFlags();
@@ -81,6 +83,10 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
         _mapController.move(widget.ward!.boundary.first, 15.0);
       }
     });
+  }
+
+  void _onWardZoneUpdate() {
+    if (mounted) setState(() {});
   }
 
   void _fetchDailyStats() {
@@ -123,6 +129,7 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
 
   @override
   void dispose() {
+    WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
     _dailyStatsSub?.cancel();
     _vehicleSub?.cancel();
     _trashSub?.cancel();
@@ -970,16 +977,9 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
               userAgentPackageName: 'com.nitin.trashtracker',
               tileProvider: kIsWeb ? null : CachedTileProvider(store: MapCacheService.store),
             ),
-            if (_showAssignedWard && widget.ward != null)
-              PolygonLayer(
-                polygons: [
-                  Polygon<Object>(
-                    points: widget.ward!.boundary,
-                    color: const Color(0xFF3B82F6).withOpacity(0.1),
-                    borderColor: const Color(0xFF3B82F6).withOpacity(0.5),
-                    borderStrokeWidth: 2,
-                  )
-                ],
+            if (_showAssignedWard)
+              ...WardZoneService.instance.buildLayers(
+                selectedWard: widget.ward?.name,
               ),
             if (_showAssignedWard && widget.ward?.optimizedRoute != null)
               PolylineLayer(

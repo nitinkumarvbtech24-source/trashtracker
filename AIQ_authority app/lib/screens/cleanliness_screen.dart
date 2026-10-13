@@ -24,6 +24,8 @@ import 'alerts_screen.dart';
 
 import '../models/garbage_flag.dart';
 import '../widgets/trash_pinpoint_marker.dart';
+import '../services/ward_zone_service.dart';
+
 class CleanlinessScreen extends StatefulWidget {
   const CleanlinessScreen({super.key});
 
@@ -67,10 +69,29 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
   @override
   void initState() {
     super.initState();
+    WardZoneService.instance.init();
+    WardZoneService.instance.notifier.addListener(_onWardZoneUpdate);
     _fetchDataFromFirestore();
     _startLiveTrackingListener();
 
     _fetchGarbageFlagsFromFirestore();
+  }
+
+  void _onWardZoneUpdate() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
+    _zonesSub?.cancel();
+    _liveTrackingSub?.cancel();
+    _vehiclesSub?.cancel();
+    _wardsSub?.cancel();
+    _dailyStatsSub?.cancel();
+    _trashSub?.cancel();
+    _garbageTimer?.cancel();
+    super.dispose();
   }
 
   void _fetchGarbageFlagsFromFirestore() {
@@ -1276,6 +1297,7 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
           userAgentPackageName: 'com.nitin.trashtracker',
           tileProvider: kIsWeb ? null : CachedTileProvider(store: MapCacheService.store),
         ),
+        ...WardZoneService.instance.buildLayers(selectedZone: _selectedZone, selectedWard: _selectedWard),
         PolylineLayer(polylines: routePolylines),
         MarkerLayer(markers: customTrashMarkers),
         

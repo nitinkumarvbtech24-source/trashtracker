@@ -19,6 +19,7 @@ import 'garbage_spots_screen.dart';
 import '../services/role_service.dart';
 import '../constants.dart';
 import '../widgets/trash_pinpoint_marker.dart';
+import '../services/ward_zone_service.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -57,8 +58,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
+    WardZoneService.instance.init();
+    WardZoneService.instance.notifier.addListener(_onWardZoneUpdate);
     _fetchDataFromFirestore();
     _startLiveTrackingListener();
+  }
+
+  void _onWardZoneUpdate() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
+    _vehiclesSub?.cancel();
+    _wardsSub?.cancel();
+    _zonesSub?.cancel();
+    _liveTrackingSub?.cancel();
+    _trashSub?.cancel();
+    _searchController.dispose();
+    super.dispose();
   }
 
   void _fetchDataFromFirestore() {
@@ -1625,81 +1644,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         userAgentPackageName: 'com.nitin.trashtracker',
                         tileProvider: kIsWeb ? null : CachedTileProvider(store: MapCacheService.store),
                       ),
-                      PolygonLayer(
-                        polygons: [
-                          ..._zonesList.where((z) => z.boundary.isNotEmpty).map((zone) {
-                            bool isHighlighted = false;
-                            if (_selectedZone == 'All Zones' && _selectedWard == 'All Wards') {
-                              isHighlighted = true;
-                            } else if (_selectedZone == zone.name && _selectedWard == 'All Wards') {
-                              isHighlighted = true;
-                            }
-
-                            if (!isHighlighted) return null;
-                            return Polygon(
-                              points: zone.boundary,
-                              color: Colors.blueAccent.withOpacity(0.2),
-                              borderColor: Colors.purple.withOpacity(0.5),
-                              borderStrokeWidth: 2,
-                            );
-                          }).whereType<Polygon>(),
-                          ..._wardsList.where((w) => w.boundary.isNotEmpty).map((ward) {
-                            bool isHighlighted = false;
-                            if (_selectedZone == 'All Zones' && _selectedWard == 'All Wards') {
-                              isHighlighted = true;
-                            } else if (_selectedWard == ward.name) {
-                              isHighlighted = true;
-                            }
-
-                            if (!isHighlighted) return null;
-                            return Polygon(
-                              points: ward.boundary,
-                              color: Colors.blueAccent.withOpacity(0.2),
-                              borderColor: Colors.purple.withOpacity(0.5),
-                              borderStrokeWidth: 2,
-                            );
-                          }).whereType<Polygon>(),
-                        ],
+                      ...WardZoneService.instance.buildLayers(
+                        selectedZone: _selectedZone,
+                        selectedWard: _selectedWard,
                       ),
                       // Real-time markers will go here
                       MarkerLayer(
                         markers: [
-                          // Zone Labels
-                          ..._zonesList.where((z) => z.boundary.isNotEmpty).map((zone) {
-                            bool isHighlighted = false;
-                            if (_selectedZone == 'All Zones' && _selectedWard == 'All Wards') isHighlighted = true;
-                            else if (_selectedZone == zone.name && _selectedWard == 'All Wards') isHighlighted = true;
-                            
-                            if (!isHighlighted) return null;
-                            double lat = 0; double lng = 0;
-                            for(var p in zone.boundary) { lat += p.latitude; lng += p.longitude; }
-                            lat /= zone.boundary.length; lng /= zone.boundary.length;
-                            return Marker(
-                              point: LatLng(lat, lng),
-                              width: 100, height: 30,
-                              child: Center(
-                                child: Text(zone.name, style: const TextStyle(color: Colors.purpleAccent, fontWeight: FontWeight.bold, fontSize: 16, shadows: [Shadow(color: Colors.white, blurRadius: 2, offset: Offset(1, 1))]))
-                              )
-                            );
-                          }).whereType<Marker>(),
-                          // Ward Labels
-                          ..._wardsList.where((w) => w.boundary.isNotEmpty).map((ward) {
-                            bool isHighlighted = false;
-                            if (_selectedZone == 'All Zones' && _selectedWard == 'All Wards') isHighlighted = true;
-                            else if (_selectedWard == ward.name) isHighlighted = true;
-
-                            if (!isHighlighted) return null;
-                            double lat = 0; double lng = 0;
-                            for(var p in ward.boundary) { lat += p.latitude; lng += p.longitude; }
-                            lat /= ward.boundary.length; lng /= ward.boundary.length;
-                            return Marker(
-                              point: LatLng(lat, lng),
-                              width: 100, height: 30,
-                              child: Center(
-                                child: Text(ward.name, style: const TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 14, shadows: [Shadow(color: Colors.white, blurRadius: 2, offset: Offset(1, 1))]))
-                              )
-                            );
-                          }).whereType<Marker>(),
                           if (_currentLocation != null)
                             Marker(
                               point: _currentLocation!,

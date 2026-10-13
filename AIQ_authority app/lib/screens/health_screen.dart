@@ -19,6 +19,7 @@ import '../models/ward.dart';
 import 'active_fleet_screen.dart';
 import 'health_database_screen.dart';
 import 'alerts_screen.dart';
+import '../services/ward_zone_service.dart';
 
 class HealthFlag {
   final String id;
@@ -130,10 +131,28 @@ class _HealthScreenState extends State<HealthScreen> {
   @override
   void initState() {
     super.initState();
+    WardZoneService.instance.init();
+    WardZoneService.instance.notifier.addListener(_onWardZoneUpdate);
     _fetchDataFromFirestore();
     _startLiveTrackingListener();
 
     _fetchHealthFlagsFromFirestore();
+  }
+
+  void _onWardZoneUpdate() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
+    _liveTrackingSub?.cancel();
+    _vehiclesSub?.cancel();
+    _wardsSub?.cancel();
+    _dailyStatsSub?.cancel();
+    _trashSub?.cancel();
+    _healthTimer?.cancel();
+    super.dispose();
   }
 
   void _fetchHealthFlagsFromFirestore() {
@@ -1005,17 +1024,9 @@ class _HealthScreenState extends State<HealthScreen> {
               userAgentPackageName: 'com.nitin.trashtracker',
               tileProvider: kIsWeb ? null : CachedTileProvider(store: MapCacheService.store),
             ),
-            if (_selectedWard != null)
-              PolygonLayer(
-                polygons: [
-                  Polygon<Object>(
-                    points: _selectedWard!.boundary,
-                    color: const Color(0xFF3B82F6).withOpacity(0.2),
-                    borderColor: const Color(0xFF3B82F6),
-                    borderStrokeWidth: 2,
-                  )
-                ],
-              ),
+            ...WardZoneService.instance.buildLayers(
+              selectedWard: _selectedWard?.name,
+            ),
             if (_selectedWard?.optimizedRoute != null)
               PolylineLayer(
                 polylines: [

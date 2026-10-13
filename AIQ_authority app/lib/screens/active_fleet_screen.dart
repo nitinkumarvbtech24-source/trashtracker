@@ -17,6 +17,7 @@ import '../models/ward.dart';
 import '../models/zone.dart';
 import '../services/role_service.dart';
 import 'vehicle_details_screen.dart';
+import '../services/ward_zone_service.dart';
 
 class ActiveFleetScreen extends StatefulWidget {
   const ActiveFleetScreen({super.key});
@@ -50,8 +51,24 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
   @override
   void initState() {
     super.initState();
+    WardZoneService.instance.init();
+    WardZoneService.instance.notifier.addListener(_onWardZoneUpdate);
     _fetchDataFromFirestore();
     _startLiveTrackingListener();
+  }
+
+  void _onWardZoneUpdate() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
+    _liveTrackingSub?.cancel();
+    _vehiclesSub?.cancel();
+    _wardsSub?.cancel();
+    _zonesSub?.cancel();
+    super.dispose();
   }
 
   void _fetchDataFromFirestore() {
@@ -695,17 +712,10 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
           userAgentPackageName: 'com.nitin.trashtracker',
           tileProvider: kIsWeb ? null : CachedTileProvider(store: MapCacheService.store),
         ),
-        if (_selectedWard != null)
-          PolygonLayer(
-            polygons: [
-              Polygon<Object>(
-                points: _selectedWard!.boundary,
-                color: const Color(0xFF3B82F6).withOpacity(0.2),
-                borderColor: const Color(0xFF3B82F6),
-                borderStrokeWidth: 2,
-              )
-            ],
-          ),
+        ...WardZoneService.instance.buildLayers(
+          selectedZone: _selectedZoneFilter,
+          selectedWard: _selectedWard?.name ?? _selectedWardFilter,
+        ),
         MarkerLayer(
           markers: filteredVehicles.where((v) => v.currentLocation != null && v.isRunning).map((vehicle) {
               final statusColor = Color(vehicle.stateColorValue);
