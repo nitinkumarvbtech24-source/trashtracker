@@ -81,19 +81,6 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
     if (mounted) setState(() {});
   }
 
-  @override
-  void dispose() {
-    WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
-    _zonesSub?.cancel();
-    _liveTrackingSub?.cancel();
-    _vehiclesSub?.cancel();
-    _wardsSub?.cancel();
-    _dailyStatsSub?.cancel();
-    _trashSub?.cancel();
-    _garbageTimer?.cancel();
-    super.dispose();
-  }
-
   void _fetchGarbageFlagsFromFirestore() {
     _trashSub = FirebaseFirestore.instance.collection('trash_spots').snapshots().listen((snapshot) {
       if (!mounted) return;
@@ -239,6 +226,7 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
 
   @override
   void dispose() {
+    WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
     _zonesSub?.cancel();
     _garbageTimer?.cancel();
     _liveTrackingSub?.cancel();

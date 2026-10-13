@@ -68,18 +68,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (mounted) setState(() {});
   }
 
-  @override
-  void dispose() {
-    WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
-    _vehiclesSub?.cancel();
-    _wardsSub?.cancel();
-    _zonesSub?.cancel();
-    _liveTrackingSub?.cancel();
-    _trashSub?.cancel();
-    _searchController.dispose();
-    super.dispose();
-  }
-
   void _fetchDataFromFirestore() {
     _vehiclesSub = FirebaseFirestore.instance.collection('vehicles').snapshots().listen((snapshot) {
       final vehicles = snapshot.docs.map((doc) => Vehicle.fromJson(doc.id, doc.data())).toList();
@@ -193,6 +181,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   void dispose() {
+    WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
     _liveTrackingSub?.cancel();
     _vehiclesSub?.cancel();
     _wardsSub?.cancel();

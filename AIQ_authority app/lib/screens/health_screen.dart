@@ -143,18 +143,6 @@ class _HealthScreenState extends State<HealthScreen> {
     if (mounted) setState(() {});
   }
 
-  @override
-  void dispose() {
-    WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
-    _liveTrackingSub?.cancel();
-    _vehiclesSub?.cancel();
-    _wardsSub?.cancel();
-    _dailyStatsSub?.cancel();
-    _trashSub?.cancel();
-    _healthTimer?.cancel();
-    super.dispose();
-  }
-
   void _fetchHealthFlagsFromFirestore() {
     _trashSub = FirebaseFirestore.instance.collection('health_spots').snapshots().listen((snapshot) {
       if (!mounted) return;
@@ -291,6 +279,7 @@ class _HealthScreenState extends State<HealthScreen> {
 
   @override
   void dispose() {
+    WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
     _healthTimer?.cancel();
     _liveTrackingSub?.cancel();
     _vehiclesSub?.cancel();
