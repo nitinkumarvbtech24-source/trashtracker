@@ -42,7 +42,11 @@ void main() async {
       GARBAGE_AI_V5_URL = savedUrlV4;
     }
   }
-  MODEL_VERSION = 5; // Forced to V5
+  final savedUrlV7 = prefs.getString('garbage_ai_v7_url');
+  if (savedUrlV7 != null && savedUrlV7.isNotEmpty) {
+    GARBAGE_AI_V7_URL = savedUrlV7;
+  }
+  MODEL_VERSION = 7; // Set to V7
 
 
   runApp(const StreetAIQApp());

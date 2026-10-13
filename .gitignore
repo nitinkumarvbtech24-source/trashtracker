@@ -42,6 +42,13 @@ Garbage_ai_model_v6/runs/
 Garbage_ai_model_v6/weights/
 Garbage_ai_model_v6/*.pt
 Garbage_ai_model_v6/*.zip
+Garbage_ai_model_v7/snapshots/
+Garbage_ai_model_v7/runs/
+Garbage_ai_model_v7/weights/
+Garbage_ai_model_v7/*.pt
+Garbage_ai_model_v7/*.onnx
+Garbage_ai_model_v7/*.zip
+Garbage_ai_model_v7/scripts/*.pt
 
 # Flutter/Dart
 .dart_tool/

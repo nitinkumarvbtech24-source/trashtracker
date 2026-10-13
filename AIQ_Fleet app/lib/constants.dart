@@ -4,9 +4,11 @@ String GARBAGE_AI_URL = "https://pointer-staff-prodigy.ngrok-free.dev";
 String GARBAGE_AI_V2_URL = "https://pointer-staff-prodigy-v2.ngrok-free.dev";
 String GARBAGE_AI_V3_URL = "https://pointer-staff-prodigy-v3.ngrok-free.dev";
 String GARBAGE_AI_V5_URL = "https://pointer-staff-prodigy.ngrok-free.dev";
-int MODEL_VERSION = 5;
+String GARBAGE_AI_V7_URL = "https://pointer-staff-prodigy.ngrok-free.dev";
+int MODEL_VERSION = 7;
 
 String get activeGarbageAiUrl {
+  if (MODEL_VERSION == 7) return GARBAGE_AI_V7_URL;
   if (MODEL_VERSION == 5) return GARBAGE_AI_V5_URL;
   if (MODEL_VERSION == 3) return GARBAGE_AI_V3_URL;
   if (MODEL_VERSION == 2) return GARBAGE_AI_V2_URL;

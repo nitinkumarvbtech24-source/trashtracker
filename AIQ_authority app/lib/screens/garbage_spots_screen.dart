@@ -1133,8 +1133,7 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
   }
 
   void _showAISettingsDialog() async {
-    final prefs = await SharedPreferences.getInstance();
-    final baseUrl = prefs.getString('garbage_ai_v5_url') ?? 'http://127.0.0.1:5001';
+    final baseUrl = activeGarbageAiUrl;
     
     double currentThreshold = 0.25;
     bool isLoading = true;

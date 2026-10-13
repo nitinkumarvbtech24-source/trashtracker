@@ -62,9 +62,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final String? v2LinksJson = prefs.getString('saved_tunnels_v2');
     final String? v3LinksJson = prefs.getString('saved_tunnels_v3');
     final String? v5LinksJson = prefs.getString('saved_tunnels_v5');
+    final String? v7LinksJson = prefs.getString('saved_tunnels_v7');
     
     Map<String, String> links = {};
-    String linksString = (MODEL_VERSION == 5 ? v5LinksJson : (MODEL_VERSION == 3 ? v3LinksJson : (MODEL_VERSION == 2 ? v2LinksJson : linksJson))) ?? '';
+    String linksString = (MODEL_VERSION == 7 ? v7LinksJson : (MODEL_VERSION == 5 ? v5LinksJson : (MODEL_VERSION == 3 ? v3LinksJson : (MODEL_VERSION == 2 ? v2LinksJson : linksJson)))) ?? '';
     if (linksString.isNotEmpty) {
       links = Map<String, String>.from(json.decode(linksString));
     }
@@ -98,7 +99,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final prefs = await SharedPreferences.getInstance();
     
     _savedLinks[name] = url;
-    if (MODEL_VERSION == 5) {
+    if (MODEL_VERSION == 7) {
+        await prefs.setString('saved_tunnels_v7', json.encode(_savedLinks));
+        await prefs.setString('garbage_ai_v7_url', url);
+        GARBAGE_AI_V7_URL = url;
+    } else if (MODEL_VERSION == 5) {
         await prefs.setString('saved_tunnels_v5', json.encode(_savedLinks));
         await prefs.setString('garbage_ai_v5_url', url);
         GARBAGE_AI_V5_URL = url;
@@ -226,7 +231,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text('Model Version', style: GoogleFonts.inter(fontSize: 14, color: Colors.white)),
-                      Text('V4 (Port 5001)', style: GoogleFonts.inter(fontSize: 14, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                      Text('V7 (Port 5001)', style: GoogleFonts.inter(fontSize: 14, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
                     ],
                   ),
                   const SizedBox(height: 16),
