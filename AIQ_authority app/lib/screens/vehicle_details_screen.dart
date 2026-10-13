@@ -115,7 +115,7 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
       setState(() {
         _garbageFlags = snapshot.docs
             .map((doc) => GarbageFlag.fromJson(doc.data(), doc.id))
-            .where((f) => f.status != 'Resolved' && f.matchesModelVersion(MODEL_VERSION) && (f.className == 'Trash_Detected' || f.className == 'Very_Dirty' || f.className == 'Slightly_Dirty' || f.displayClass == 'Trash Detected' || f.displayClass == 'Very Dirty' || f.displayClass == 'Slightly Dirty'))
+            .where((f) => f.status != 'Resolved' && f.status != 'Deflagged' && f.matchesModelVersion(MODEL_VERSION) && (f.className == 'Trash_Detected' || f.displayClass == 'Trash Detected'))
             .toList();
       });
     });

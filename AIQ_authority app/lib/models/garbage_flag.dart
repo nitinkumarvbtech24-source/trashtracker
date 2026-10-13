@@ -13,6 +13,7 @@ class GarbageFlag {
   final double lng;
   final String vehicleNumber;
   final String ward;
+  final String zone;
   final String? sessionId;
   final String? pointType;
   final String status;
@@ -30,6 +31,7 @@ class GarbageFlag {
     required this.lng,
     required this.vehicleNumber,
     required this.ward,
+    this.zone = 'Unknown',
     this.sessionId,
     this.pointType,
     required this.status,
@@ -76,6 +78,7 @@ class GarbageFlag {
       lng: (json['lng'] as num?)?.toDouble() ?? -71.0589,
       vehicleNumber: json['vehicle_number'] ?? 'Unknown',
       ward: json['ward'] ?? 'Unknown',
+      zone: json['zone'] ?? 'Unknown',
       sessionId: json['session_id'],
       pointType: json['point_type'],
       status: json['status'] ?? 'Flagged',

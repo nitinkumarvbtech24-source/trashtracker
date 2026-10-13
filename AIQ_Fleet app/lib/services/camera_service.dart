@@ -853,14 +853,16 @@ class CameraService extends ChangeNotifier {
         debugPrint("Gallery save error: $galErr");
       }
 
-      // Insert to local database
-      await DatabaseService().insertLocalFlag(localFile.path, roadStatus, confidence, timestamp, lat, lng);
+      // Insert to local database if trash detected
+      if (roadStatus == 'Trash Detected') {
+        await DatabaseService().insertLocalFlag(localFile.path, roadStatus, confidence, timestamp, lat, lng);
+      }
     } catch (e) {
       debugPrint("Error downloading/saving annotated image: $e");
     }
 
     if (imageUrl != null) {
-      if (roadStatus == 'Trash Detected' || roadStatus == 'Very Dirty Road' || roadStatus == 'Slightly Dirty Road') {
+      if (roadStatus == 'Trash Detected') {
         try {
           await FirebaseFirestore.instance.collection('trash_spots').add({
             'lat': lat,

@@ -291,6 +291,10 @@ class _ComndScreenState extends State<ComndScreen> {
           final data = doc.data() as Map<String, dynamic>;
           data['id'] = doc.id;
 
+          // Only Trash Detected
+          final roadStatus = (data['road_status'] ?? '').toString();
+          if (roadStatus != 'Trash Detected') continue;
+
           // Model version filter
           final mv = data['model_version'] ?? data['modelVersion'];
           if (mv != null) {
@@ -301,11 +305,15 @@ class _ComndScreenState extends State<ComndScreen> {
           }
 
           // Geographic access filter
-          final docZone = data['zone'] ?? '';
-          final docWard = data['ward'] ?? '';
+          final docZone = (data['zone'] ?? '').toString().trim();
+          final docWard = (data['ward'] ?? '').toString().trim();
           bool hasAccess = hasAllAccess;
-          if (!hasAccess && allowedZones.isNotEmpty && allowedZones.contains(docZone)) hasAccess = true;
-          if (!hasAccess && allowedWards.isNotEmpty && allowedWards.contains(docWard)) hasAccess = true;
+          if (!hasAccess && allowedZones.isNotEmpty) {
+            hasAccess = allowedZones.any((z) => z.trim().toLowerCase() == docZone.toLowerCase());
+          }
+          if (!hasAccess && allowedWards.isNotEmpty) {
+            hasAccess = allowedWards.any((w) => w.trim().toLowerCase() == docWard.toLowerCase());
+          }
 
           if (hasAccess) {
             allFlags.add(data);
@@ -335,10 +343,18 @@ class _ComndScreenState extends State<ComndScreen> {
         }
 
         if (_vehicleSelectedZone != 'All Zones') {
-          displayedFlags = displayedFlags.where((f) => f['zone'] == _vehicleSelectedZone).toList();
+          displayedFlags = displayedFlags.where((f) {
+            final z = (f['zone'] ?? '').toString().trim().toLowerCase();
+            final target = _vehicleSelectedZone.trim().toLowerCase();
+            return z == target || z.contains(target) || target.contains(z);
+          }).toList();
         }
         if (_vehicleSelectedWard != 'All Wards') {
-          displayedFlags = displayedFlags.where((f) => f['ward'] == _vehicleSelectedWard).toList();
+          displayedFlags = displayedFlags.where((f) {
+            final w = (f['ward'] ?? '').toString().trim().toLowerCase();
+            final target = _vehicleSelectedWard.trim().toLowerCase();
+            return w == target || w.replaceAll(' ', '') == target.replaceAll(' ', '');
+          }).toList();
         }
 
         if (_vehicleSearchQuery.trim().isNotEmpty) {
@@ -413,7 +429,18 @@ class _ComndScreenState extends State<ComndScreen> {
                                 constraints: const BoxConstraints(minWidth: 38, minHeight: 38),
                               ),
                               IconButton(
-                                onPressed: () => setState(() => _isVehicleMapView = true),
+                                onPressed: () {
+                                  setState(() => _isVehicleMapView = true);
+                                  if (displayedFlags.isNotEmpty) {
+                                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                                      try {
+                                        final firstLat = ((displayedFlags.first['lat'] ?? 13.0568) as num).toDouble();
+                                        final firstLng = ((displayedFlags.first['lng'] ?? 77.5027) as num).toDouble();
+                                        _vehicleMapController.move(LatLng(firstLat, firstLng), 14.0);
+                                      } catch (_) {}
+                                    });
+                                  }
+                                },
                                 icon: Icon(LucideIcons.map, color: _isVehicleMapView ? const Color(0xFF0F5132) : const Color(0xFF94A3B8), size: 18),
                                 tooltip: 'Map View',
                                 constraints: const BoxConstraints(minWidth: 38, minHeight: 38),
@@ -817,6 +844,27 @@ class _ComndScreenState extends State<ComndScreen> {
   }
 
   Widget _buildVehicleMapView(List<Map<String, dynamic>> flags) {
+    const double clusterDist = 0.00018;
+    final List<List<Map<String, dynamic>>> clusters = [];
+
+    for (var f in flags) {
+      final lat = ((f['lat'] ?? 0.0) as num).toDouble();
+      final lng = ((f['lng'] ?? 0.0) as num).toDouble();
+      bool added = false;
+      for (var c in clusters) {
+        final cLat = ((c.first['lat'] ?? 0.0) as num).toDouble();
+        final cLng = ((c.first['lng'] ?? 0.0) as num).toDouble();
+        if ((lat - cLat).abs() < clusterDist && (lng - cLng).abs() < clusterDist) {
+          c.add(f);
+          added = true;
+          break;
+        }
+      }
+      if (!added) {
+        clusters.add([f]);
+      }
+    }
+
     return Container(
       margin: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -828,8 +876,10 @@ class _ComndScreenState extends State<ComndScreen> {
         child: FlutterMap(
           mapController: _vehicleMapController,
           options: MapOptions(
-            initialCenter: const LatLng(13.003, 77.564),
-            initialZoom: 12,
+            initialCenter: flags.isNotEmpty
+                ? LatLng(((flags.first['lat'] ?? 13.0568) as num).toDouble(), ((flags.first['lng'] ?? 77.5027) as num).toDouble())
+                : const LatLng(13.0568, 77.5027),
+            initialZoom: 13,
           ),
           children: [
             TileLayer(
@@ -837,7 +887,8 @@ class _ComndScreenState extends State<ComndScreen> {
               subdomains: const ['a', 'b', 'c'],
             ),
             MarkerLayer(
-              markers: flags.map<Marker>((f) {
+              markers: clusters.map<Marker>((cluster) {
+                final f = cluster.first;
                 final lat = ((f['lat'] ?? 0.0) as num).toDouble();
                 final lng = ((f['lng'] ?? 0.0) as num).toDouble();
                 final status = f['status'] ?? 'Flagged';
@@ -864,7 +915,8 @@ class _ComndScreenState extends State<ComndScreen> {
                           ),
                         )
                       : TrashPinpointWidget(
-                          isVeryDirty: f['road_status'] == 'Very Dirty Road' || f['road_status'] == 'Very_Dirty',
+                          count: cluster.length,
+                          isVeryDirty: cluster.any((item) => item['road_status'] == 'Very Dirty Road' || item['road_status'] == 'Very_Dirty'),
                           onTap: () => _showMarkerDetailsModal(context, f),
                         ),
                 );

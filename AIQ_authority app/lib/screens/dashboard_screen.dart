@@ -18,6 +18,8 @@ import 'package:fl_chart/fl_chart.dart';
 import 'garbage_spots_screen.dart';
 import '../services/role_service.dart';
 import '../constants.dart';
+import '../widgets/trash_pinpoint_marker.dart';
+
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
 
@@ -48,6 +50,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   StreamSubscription<QuerySnapshot>? _liveTrackingSub;
   StreamSubscription<QuerySnapshot>? _trashSub;
   bool _isFullScreenMap = false;
+  bool _initialMapCentered = false;
   Map<String, Map<String, dynamic>> _liveTrackingData = {};
   int _bottomNavIndex = 0;
 
@@ -149,13 +152,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
             }
             final status = data['status'] ?? 'Flagged';
             final roadStatus = data['road_status'] ?? '';
-            return status != 'Resolved' && (roadStatus == 'Trash Detected' || roadStatus == 'Very Dirty Road' || roadStatus == 'Slightly Dirty Road');
+            return status != 'Resolved' && status != 'Deflagged' && roadStatus == 'Trash Detected';
           }).map((doc) {
             final data = doc.data();
             data['id'] = doc.id;
             return data;
           }).toList();
         });
+
+        if (!_initialMapCentered && _trashSpots.isNotEmpty) {
+          _initialMapCentered = true;
+          try {
+            final firstLat = (_trashSpots.first['lat'] as num).toDouble();
+            final firstLng = (_trashSpots.first['lng'] as num).toDouble();
+            _mapController.move(LatLng(firstLat, firstLng), 14.0);
+          } catch (_) {}
+        }
       }
     });
   }
@@ -1357,7 +1369,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       onTap: () {
         Navigator.push(context, MaterialPageRoute(builder: (context) => const GarbageSpotsScreen()));
       },
-      child: _buildNewKpiCard('Garbage Spots', '342', 'Spots', LucideIcons.trash, const Color(0xFF198754), '+ 18%', isMobile: isMobile),
+      child: _buildNewKpiCard('Garbage Spots', '${_trashSpots.length}', 'Spots', LucideIcons.trash, const Color(0xFF198754), '+ 18%', isMobile: isMobile),
     );
     final card3 = _buildNewKpiCard('Potholes', '215', 'Potholes', LucideIcons.alertTriangle, const Color(0xFFFFC107), '+ 15%', isMobile: isMobile);
     final card4 = _buildNewKpiCard('Vehicle Anomalies', '18', 'Detected', LucideIcons.alertOctagon, const Color(0xFFDC3545), '- 5%', isPositive: false, isMobile: isMobile);
@@ -1506,50 +1518,45 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
     });
 
-    // Process markers for all spots
+    // Process clustered markers for trash spots
+    const double clusterDist = 0.00018;
+    final List<List<Map<String, dynamic>>> clusters = [];
+
     for (var spot in _trashSpots) {
-      final lat = spot['lat'] as double;
-      final lng = spot['lng'] as double;
-      final status = spot['road_status'];
-      final pointType = spot['point_type'];
-      final isCleared = spot['status'] == 'Cleared';
-
-      // Start/End indicators
-      if (pointType == 'start') {
-        customTrashMarkers.add(Marker(
-          point: LatLng(lat, lng),
-          width: 30, height: 30,
-          alignment: Alignment.center,
-          child: const Icon(Icons.play_circle_fill, color: Colors.greenAccent, size: 28),
-        ));
-      } else if (pointType == 'end') {
-        customTrashMarkers.add(Marker(
-          point: LatLng(lat, lng),
-          width: 30, height: 30,
-          alignment: Alignment.center,
-          child: const Icon(Icons.stop_circle, color: Colors.redAccent, size: 28),
-        ));
+      final lat = (spot['lat'] as num).toDouble();
+      final lng = (spot['lng'] as num).toDouble();
+      bool added = false;
+      for (var c in clusters) {
+        final cLat = (c.first['lat'] as num).toDouble();
+        final cLng = (c.first['lng'] as num).toDouble();
+        if ((lat - cLat).abs() < clusterDist && (lng - cLng).abs() < clusterDist) {
+          c.add(spot);
+          added = true;
+          break;
+        }
       }
-
-      // Only show flags for dirty or cleared spots (no clutter for Clean spots)
-      if (status != 'Clean Road' && status != 'Clean') {
-        Color markerColor = isCleared ? Colors.grey : ((status == 'Very Dirty Road' || status == 'Trash Detected') ? Colors.redAccent : Colors.orangeAccent);
-        
-        customTrashMarkers.add(Marker(
-          point: LatLng(lat, lng),
-          width: 40, height: 40,
-          alignment: Alignment.bottomCenter, // Fix anchor point to exact location
-          child: GestureDetector(
-            onTap: () => _showTrashPopup(spot),
-            child: Icon(
-              Icons.tour_rounded,
-              color: markerColor,
-              size: 32,
-              shadows: const [Shadow(color: Colors.black54, blurRadius: 4, offset: Offset(0, 2))],
-            ),
-          ),
-        ));
+      if (!added) {
+        clusters.add([spot]);
       }
+    }
+
+    for (var cluster in clusters) {
+      final spot = cluster.first;
+      final lat = (spot['lat'] as num).toDouble();
+      final lng = (spot['lng'] as num).toDouble();
+      final isVeryDirty = cluster.any((s) => s['road_status'] == 'Very Dirty Road' || s['road_status'] == 'Trash Detected');
+
+      customTrashMarkers.add(Marker(
+        point: LatLng(lat, lng),
+        width: 38,
+        height: 46,
+        alignment: Alignment.topCenter,
+        child: TrashPinpointWidget(
+          count: cluster.length,
+          isVeryDirty: isVeryDirty,
+          onTap: () => _showTrashPopup(spot),
+        ),
+      ));
     }
     // ----------------------------------------------------
 
@@ -1605,8 +1612,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     FlutterMap(
                     mapController: _mapController,
                     options: MapOptions(
-                      initialCenter: mapCenter, // Use default until real location loaded
-                      initialZoom: mapZoom,
+                      initialCenter: _trashSpots.isNotEmpty
+                          ? LatLng((_trashSpots.first['lat'] as num).toDouble(), (_trashSpots.first['lng'] as num).toDouble())
+                          : (_filteredVehicles.isNotEmpty && _filteredVehicles.first.currentLocation != null
+                              ? _filteredVehicles.first.currentLocation!
+                              : const LatLng(13.0568, 77.5027)),
+                      initialZoom: 13.0,
                     ),
                     children: [
                       TileLayer(

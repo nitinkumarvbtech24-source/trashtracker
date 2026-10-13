@@ -62,6 +62,7 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
 
   StreamSubscription<QuerySnapshot>? _trashSub;
   List<Polyline> _snappedPolylines = [];
+  bool _initialMapCentered = false;
 
   @override
   void initState() {
@@ -78,10 +79,17 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
       setState(() {
         _garbageFlags = snapshot.docs
             .map((doc) => GarbageFlag.fromJson(doc.data(), doc.id))
-            .where((f) => f.status != 'Resolved' && f.matchesModelVersion(MODEL_VERSION) && (f.className == 'Trash_Detected' || f.className == 'Very_Dirty' || f.className == 'Slightly_Dirty' || f.displayClass == 'Trash Detected' || f.displayClass == 'Very Dirty' || f.displayClass == 'Slightly Dirty'))
+            .where((f) => f.status != 'Resolved' && f.status != 'Deflagged' && f.matchesModelVersion(MODEL_VERSION) && (f.className == 'Trash_Detected' || f.displayClass == 'Trash Detected'))
             .toList();
       });
       _recalculatePolylines();
+
+      if (!_initialMapCentered && _garbageFlags.isNotEmpty) {
+        _initialMapCentered = true;
+        try {
+          _mapController.move(LatLng(_garbageFlags.first.lat, _garbageFlags.first.lng), 14.0);
+        } catch (_) {}
+      }
     });
   }
 
@@ -1255,9 +1263,11 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
     return FlutterMap(
       mapController: _mapController,
       options: MapOptions(
-        initialCenter: _vehicles.isNotEmpty && _vehicles.first.currentLocation != null
-            ? _vehicles.first.currentLocation!
-            : const LatLng(42.3601, -71.0589),
+        initialCenter: _garbageFlags.isNotEmpty
+            ? LatLng(_garbageFlags.first.lat, _garbageFlags.first.lng)
+            : (_vehicles.isNotEmpty && _vehicles.first.currentLocation != null
+                ? _vehicles.first.currentLocation!
+                : const LatLng(13.0568, 77.5027)),
         initialZoom: 13.0,
       ),
       children: [

@@ -78,7 +78,7 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
       setState(() {
         _garbageFlags = snapshot.docs
             .map((doc) => GarbageFlag.fromJson(doc.data(), doc.id))
-            .where((f) => f.matchesModelVersion(MODEL_VERSION) && (f.className == 'Trash_Detected' || f.className == 'Very_Dirty' || f.className == 'Slightly_Dirty' || f.displayClass == 'Trash Detected' || f.displayClass == 'Very Dirty' || f.displayClass == 'Slightly Dirty'))
+            .where((f) => f.status != 'Resolved' && f.status != 'Deflagged' && f.matchesModelVersion(MODEL_VERSION) && (f.className == 'Trash_Detected' || f.displayClass == 'Trash Detected'))
             .toList();
         
         // Sort by timestamp descending
@@ -111,10 +111,19 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
       ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _viewMode,
-        onTap: (idx) => setState(() {
-          _viewMode = idx;
-          if (idx == 0) _selectedFlag = null; // Clear selection when switching to list
-        }),
+        onTap: (idx) {
+          setState(() {
+            _viewMode = idx;
+            if (idx == 0) _selectedFlag = null; // Clear selection when switching to list
+          });
+          if (idx == 1 && _garbageFlags.isNotEmpty) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              try {
+                _mapController.move(LatLng(_garbageFlags.first.lat, _garbageFlags.first.lng), 14.0);
+              } catch (_) {}
+            });
+          }
+        },
         selectedItemColor: const Color(0xFF0F5132),
         unselectedItemColor: const Color(0xFF94A3B8),
         items: const [
@@ -230,12 +239,18 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
 
     List<GarbageFlag> filteredFlags = _garbageFlags.where((flag) {
       if (!hasAllAccess && !allowedWards.contains('All Wards')) {
-        // If they don't have access to all wards, and their explicitly allowed wards doesn't contain this ward, block it.
-        // (Note: in a real app, you'd fetch the ward's zone here or from a backend to see if it belongs to their allowedZones)
-        if (!allowedWards.contains(flag.ward)) return false;
+        if (!allowedWards.any((w) => w.trim().toLowerCase() == flag.ward.trim().toLowerCase())) return false;
       }
-      if (validSelectedZone != 'All Zones' && flag.ward != validSelectedZone && 'Central Zone' != validSelectedZone) return false; // Basic mock filter logic
-      if (validSelectedWard != 'All Wards' && flag.ward != validSelectedWard) return false;
+      if (validSelectedZone != 'All Zones') {
+        final z = flag.zone.trim().toLowerCase();
+        final target = validSelectedZone.trim().toLowerCase();
+        if (z != target && !z.contains(target) && !target.contains(z)) return false;
+      }
+      if (validSelectedWard != 'All Wards') {
+        final w = flag.ward.trim().toLowerCase();
+        final target = validSelectedWard.trim().toLowerCase();
+        if (w != target && w.replaceAll(' ', '') != target.replaceAll(' ', '')) return false;
+      }
       
       String severity = flag.className.contains('Very_Dirty') ? 'High' : 'Medium';
       if (_filterSeverity != 'All Severity' && severity != _filterSeverity) return false;
@@ -400,8 +415,10 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
           FlutterMap(
             mapController: _mapController,
             options: MapOptions(
-              initialCenter: const LatLng(12.9716, 77.5946),
-              initialZoom: 12.0,
+              initialCenter: flags.isNotEmpty
+                  ? LatLng(flags.first.lat, flags.first.lng)
+                  : const LatLng(13.0568, 77.5027),
+              initialZoom: 13.0,
               onTap: (_, __) => setState(() => _selectedFlag = null),
             ),
             children: [
@@ -789,7 +806,7 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
             ),
           ),
           Expanded(flex: 1, child: Text(flag.ward, style: const TextStyle(color: Color(0xFF344054)))),
-          const Expanded(flex: 1, child: Text('Central Zone', style: TextStyle(color: Color(0xFF344054)))),
+          Expanded(flex: 1, child: Text(flag.zone.isNotEmpty && flag.zone != 'Unknown' ? flag.zone : 'Central Zone', style: const TextStyle(color: Color(0xFF344054)))),
           Expanded(
             flex: 1,
             child: Align(

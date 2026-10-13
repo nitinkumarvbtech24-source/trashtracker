@@ -58,6 +58,9 @@ class _ComndListScreenState extends State<ComndListScreen> {
               return false;
             }
 
+            final roadStatus = data['road_status'] ?? '';
+            if (roadStatus != 'Trash Detected') return false;
+
             final docZone = data['zone'] ?? '';
             final docWard = data['ward'] ?? '';
 
