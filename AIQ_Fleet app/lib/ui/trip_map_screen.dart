@@ -3,6 +3,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../constants.dart';
+import '../widgets/trash_pinpoint_marker.dart';
 
 class TrailSegment {
   final LatLng start;
@@ -73,6 +74,12 @@ class _TripMapScreenState extends State<TripMapScreen> {
         final data = spotDoc.data();
         if (data['status'] == 'Resolved') continue; 
         
+        // Filter by active model version
+        final mv = data['model_version'] ?? data['modelVersion'];
+        if (mv == null) continue;
+        final s = mv.toString().toLowerCase().trim();
+        if (s != MODEL_VERSION.toString() && s != 'v$MODEL_VERSION') continue;
+
         // Filter by timestamp range for this specific trip
         if (data['timestamp'] != null) {
           final spotTime = (data['timestamp'] as Timestamp).toDate();
@@ -212,26 +219,16 @@ class _TripMapScreenState extends State<TripMapScreen> {
                     markers: _trashSpots.map((spot) {
                       final lat = spot['lat'] as double;
                       final lng = spot['lng'] as double;
-                      final isVeryDirty = spot['road_status'] == 'Very Dirty Road';
-                      final markerColor = isVeryDirty ? Colors.redAccent : Colors.orangeAccent;
+                      final isVeryDirty = spot['road_status'] == 'Very Dirty Road' || spot['road_status'] == 'Very_Dirty';
                       
                       return Marker(
                         point: LatLng(lat, lng),
-                        width: 60,
-                        height: 80,
-                        child: GestureDetector(
+                        width: 38,
+                        height: 46,
+                        alignment: Alignment.topCenter,
+                        child: TrashPinpointWidget(
+                          isVeryDirty: isVeryDirty,
                           onTap: () => _showTrashPopup(spot),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.tour_rounded,
-                                color: markerColor,
-                                size: 32,
-                                shadows: const [Shadow(color: Colors.black45, blurRadius: 4, offset: Offset(0, 2))],
-                              ),
-                            ],
-                          ),
                         ),
                       );
                     }).toList(),

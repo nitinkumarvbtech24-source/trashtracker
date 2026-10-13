@@ -15,6 +15,7 @@ import '../services/role_service.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../constants.dart';
+import '../widgets/trash_pinpoint_marker.dart';
 
 class GarbageSpotsScreen extends StatefulWidget {
   const GarbageSpotsScreen({super.key});
@@ -77,7 +78,7 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
       setState(() {
         _garbageFlags = snapshot.docs
             .map((doc) => GarbageFlag.fromJson(doc.data(), doc.id))
-            .where((f) => f.className == 'Trash_Detected' || f.className == 'Very_Dirty' || f.className == 'Slightly_Dirty' || f.displayClass == 'Trash Detected' || f.displayClass == 'Very Dirty' || f.displayClass == 'Slightly Dirty')
+            .where((f) => f.matchesModelVersion(MODEL_VERSION) && (f.className == 'Trash_Detected' || f.className == 'Very_Dirty' || f.className == 'Slightly_Dirty' || f.displayClass == 'Trash Detected' || f.displayClass == 'Very Dirty' || f.displayClass == 'Slightly Dirty'))
             .toList();
         
         // Sort by timestamp descending
@@ -410,41 +411,45 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
               ),
               Builder(
                 builder: (context) {
-                  final camera = MapCamera.of(context);
-                  final showPins = camera.zoom >= 14.0;
-                  
-                  if (showPins) {
-                    return MarkerLayer(
-                      markers: flags.map((flag) {
-                        return Marker(
-                          point: LatLng(flag.lat, flag.lng),
-                          width: 40,
-                          height: 40,
-                          child: GestureDetector(
-                            onTap: () {
-                              setState(() {
-                                _selectedFlag = flag;
-                              });
-                              _mapController.move(LatLng(flag.lat, flag.lng), 15.0);
-                            },
-                            child: const Icon(LucideIcons.mapPin, color: Colors.red, size: 32),
-                          ),
-                        );
-                      }).toList(),
-                    );
-                  } else {
-                    // Sort flags by time ascending just for the line so it draws a continuous path sequentially
-                    final sortedFlags = List<GarbageFlag>.from(flags)..sort((a, b) => a.timestamp.compareTo(b.timestamp));
-                    return PolylineLayer(
-                      polylines: [
-                        Polyline(
-                          points: sortedFlags.map((f) => LatLng(f.lat, f.lng)).toList(),
-                          color: Colors.red.withOpacity(0.8),
-                          strokeWidth: 4.0,
-                        ),
-                      ],
-                    );
+                  const double clusterDist = 0.00018;
+                  final List<List<GarbageFlag>> clusters = [];
+
+                  for (var flag in flags) {
+                    bool added = false;
+                    for (var c in clusters) {
+                      if ((flag.lat - c.first.lat).abs() < clusterDist && (flag.lng - c.first.lng).abs() < clusterDist) {
+                        c.add(flag);
+                        added = true;
+                        break;
+                      }
+                    }
+                    if (!added) {
+                      clusters.add([flag]);
+                    }
                   }
+
+                  return MarkerLayer(
+                    markers: clusters.map((cluster) {
+                      final flag = cluster.first;
+                      final isVeryDirty = cluster.any((f) => f.className == 'Very_Dirty' || f.displayClass == 'Very Dirty');
+                      return Marker(
+                        point: LatLng(flag.lat, flag.lng),
+                        width: 38,
+                        height: 46,
+                        alignment: Alignment.topCenter,
+                        child: TrashPinpointWidget(
+                          count: cluster.length,
+                          isVeryDirty: isVeryDirty,
+                          onTap: () {
+                            setState(() {
+                              _selectedFlag = flag;
+                            });
+                            _mapController.move(LatLng(flag.lat, flag.lng), 15.0);
+                          },
+                        ),
+                      );
+                    }).toList(),
+                  );
                 },
               ),
             ],

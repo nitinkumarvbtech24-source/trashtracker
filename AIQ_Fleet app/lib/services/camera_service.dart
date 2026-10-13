@@ -873,6 +873,7 @@ class CameraService extends ChangeNotifier {
             'vehicle_number': vehicleNumber,
             'ward': ward,
             'zone': zone,
+            'model_version': MODEL_VERSION,
             if (sessionId != null) 'session_id': sessionId,
             if (pointType != null) 'point_type': pointType,
           });

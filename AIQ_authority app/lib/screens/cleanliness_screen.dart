@@ -23,6 +23,7 @@ import 'database_screen.dart';
 import 'alerts_screen.dart';
 
 import '../models/garbage_flag.dart';
+import '../widgets/trash_pinpoint_marker.dart';
 class CleanlinessScreen extends StatefulWidget {
   const CleanlinessScreen({super.key});
 
@@ -77,7 +78,7 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
       setState(() {
         _garbageFlags = snapshot.docs
             .map((doc) => GarbageFlag.fromJson(doc.data(), doc.id))
-            .where((f) => f.status != 'Resolved' && (f.className == 'Trash_Detected' || f.className == 'Very_Dirty' || f.className == 'Slightly_Dirty' || f.displayClass == 'Trash Detected' || f.displayClass == 'Very Dirty' || f.displayClass == 'Slightly Dirty'))
+            .where((f) => f.status != 'Resolved' && f.matchesModelVersion(MODEL_VERSION) && (f.className == 'Trash_Detected' || f.className == 'Very_Dirty' || f.className == 'Slightly_Dirty' || f.displayClass == 'Trash Detected' || f.displayClass == 'Very Dirty' || f.displayClass == 'Slightly Dirty'))
             .toList();
       });
       _recalculatePolylines();
@@ -1217,38 +1218,36 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
       ));
     }
 
-    Map<String, int> locationCounts = {};
-    for (var flag in _garbageFlags) {
-      String locKey = '_';
-      int count = locationCounts[locKey] ?? 0;
-      locationCounts[locKey] = count + 1;
+    const double clusterDist = 0.00018;
+    final List<List<GarbageFlag>> clusters = [];
 
-      double offsetLat = flag.lat;
-      double offsetLng = flag.lng;
-      if (count > 0) {
-        offsetLng += (count * 0.0002);
+    for (var flag in _garbageFlags) {
+      bool added = false;
+      for (var c in clusters) {
+        if ((flag.lat - c.first.lat).abs() < clusterDist && (flag.lng - c.first.lng).abs() < clusterDist) {
+          c.add(flag);
+          added = true;
+          break;
+        }
       }
+      if (!added) {
+        clusters.add([flag]);
+      }
+    }
+
+    for (var cluster in clusters) {
+      final flag = cluster.first;
+      final isVeryDirty = cluster.any((f) => f.className == 'Very_Dirty' || f.displayClass == 'Very Dirty');
 
       customTrashMarkers.add(Marker(
-        point: LatLng(offsetLat, offsetLng),
-        width: 32, height: 32,
-        alignment: Alignment.center,
-        child: GestureDetector(
+        point: LatLng(flag.lat, flag.lng),
+        width: 38,
+        height: 46,
+        alignment: Alignment.topCenter,
+        child: TrashPinpointWidget(
+          count: cluster.length,
+          isVeryDirty: isVeryDirty,
           onTap: () => _showTrashPopup(flag),
-          child: Container(
-            decoration: BoxDecoration(
-              color: flag.className == 'Very_Dirty' ? Colors.red : Colors.orange,
-              borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: Colors.white, width: 2),
-              boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2))],
-            ),
-            child: const Center(
-              child: Text(
-                'P', 
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
-              ),
-            ),
-          ),
         ),
       ));
     }

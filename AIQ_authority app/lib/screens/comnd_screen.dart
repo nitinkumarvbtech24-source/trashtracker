@@ -7,6 +7,8 @@ import 'package:url_launcher/url_launcher.dart';
 import '../services/role_service.dart';
 import '../widgets/ngrok_image.dart';
 import 'comnd_deflag_screen.dart';
+import '../constants.dart';
+import '../widgets/trash_pinpoint_marker.dart';
 
 class ComndScreen extends StatefulWidget {
   const ComndScreen({super.key});
@@ -288,6 +290,15 @@ class _ComndScreenState extends State<ComndScreen> {
         for (var doc in docs) {
           final data = doc.data() as Map<String, dynamic>;
           data['id'] = doc.id;
+
+          // Model version filter
+          final mv = data['model_version'] ?? data['modelVersion'];
+          if (mv != null) {
+            final s = mv.toString().toLowerCase().trim();
+            if (s != MODEL_VERSION.toString() && s != 'v$MODEL_VERSION') continue;
+          } else {
+            continue;
+          }
 
           // Geographic access filter
           final docZone = data['zone'] ?? '';
@@ -834,26 +845,28 @@ class _ComndScreenState extends State<ComndScreen> {
 
                 return Marker(
                   point: LatLng(lat, lng),
-                  width: 44,
-                  height: 44,
-                  child: GestureDetector(
-                    onTap: () {
-                      _showMarkerDetailsModal(context, f);
-                    },
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: isDeflagged ? const Color(0xFF10B981) : const Color(0xFFEF4444),
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 2),
-                        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2))],
-                      ),
-                      child: Icon(
-                        isDeflagged ? LucideIcons.check : LucideIcons.truck,
-                        color: Colors.white,
-                        size: 20,
-                      ),
-                    ),
-                  ),
+                  width: isDeflagged ? 36 : 38,
+                  height: isDeflagged ? 36 : 46,
+                  alignment: isDeflagged ? Alignment.center : Alignment.topCenter,
+                  child: isDeflagged
+                      ? GestureDetector(
+                          onTap: () => _showMarkerDetailsModal(context, f),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF10B981),
+                              shape: BoxShape.circle,
+                              border: Border.all(color: Colors.white, width: 2),
+                              boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2))],
+                            ),
+                            child: const Center(
+                              child: Icon(LucideIcons.check, color: Colors.white, size: 18),
+                            ),
+                          ),
+                        )
+                      : TrashPinpointWidget(
+                          isVeryDirty: f['road_status'] == 'Very Dirty Road' || f['road_status'] == 'Very_Dirty',
+                          onTap: () => _showMarkerDetailsModal(context, f),
+                        ),
                 );
               }).toList(),
             ),

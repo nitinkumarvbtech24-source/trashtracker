@@ -19,6 +19,7 @@ import '../widgets/ngrok_image.dart';
 import 'cleanliness_screen.dart';
 import '../models/garbage_flag.dart';
 import 'database_screen.dart';
+import '../widgets/trash_pinpoint_marker.dart';
 
 class VehicleDetailsScreen extends StatefulWidget {
   final Vehicle vehicle;
@@ -114,7 +115,7 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
       setState(() {
         _garbageFlags = snapshot.docs
             .map((doc) => GarbageFlag.fromJson(doc.data(), doc.id))
-            .where((f) => f.status != 'Resolved' && (f.className == 'Trash_Detected' || f.className == 'Very_Dirty' || f.className == 'Slightly_Dirty' || f.displayClass == 'Trash Detected' || f.displayClass == 'Very Dirty' || f.displayClass == 'Slightly Dirty'))
+            .where((f) => f.status != 'Resolved' && f.matchesModelVersion(MODEL_VERSION) && (f.className == 'Trash_Detected' || f.className == 'Very_Dirty' || f.className == 'Slightly_Dirty' || f.displayClass == 'Trash Detected' || f.displayClass == 'Very Dirty' || f.displayClass == 'Slightly Dirty'))
             .toList();
       });
     });
@@ -994,14 +995,14 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
               MarkerLayer(
                 markers: _garbageFlags.where((f) => f.className != 'Clean' && f.pointType != 'intermediate').map((flag) {
                   final isVeryDirty = flag.className == 'Very_Dirty';
-                  final markerColor = (isVeryDirty ? Colors.redAccent : Colors.orangeAccent);
                   return Marker(
                     point: LatLng(flag.lat, flag.lng),
-                    width: 30,
-                    height: 30,
-                    child: GestureDetector(
+                    width: 38,
+                    height: 46,
+                    alignment: Alignment.topCenter,
+                    child: TrashPinpointWidget(
+                      isVeryDirty: isVeryDirty,
                       onTap: () => _showTrashPopup(flag),
-                      child: Icon(Icons.location_on, color: markerColor, size: 24),
                     ),
                   );
                 }).toList(),

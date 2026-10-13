@@ -220,6 +220,14 @@ class DatabaseService {
     return [];
   }
 
+  Future<void> clearAllLocalFlags() async {
+    if (_isWeb) return;
+    final db = await database;
+    if (db != null) {
+      await db.delete('local_flags');
+    }
+  }
+
   // --- Queued Snapshots (Offline Sequential Queue) ---
   Future<int> insertQueuedSnapshot(Map<String, dynamic> data) async {
     if (_isWeb) {

@@ -16,6 +16,7 @@ class GarbageFlag {
   final String? sessionId;
   final String? pointType;
   final String status;
+  final dynamic modelVersion;
 
   GarbageFlag({
     required this.id,
@@ -32,7 +33,15 @@ class GarbageFlag {
     this.sessionId,
     this.pointType,
     required this.status,
+    this.modelVersion,
   });
+
+  bool matchesModelVersion(int version) {
+    if (modelVersion == null) return false;
+    if (modelVersion == version) return true;
+    final s = modelVersion.toString().toLowerCase().trim();
+    return s == version.toString() || s == 'v$version';
+  }
 
   factory GarbageFlag.fromJson(Map<String, dynamic> json, [String? docId]) {
     String rawUrl = json['image_url']?.toString() ?? '';
@@ -70,6 +79,7 @@ class GarbageFlag {
       sessionId: json['session_id'],
       pointType: json['point_type'],
       status: json['status'] ?? 'Flagged',
+      modelVersion: json['model_version'] ?? json['modelVersion'],
     );
   }
 }

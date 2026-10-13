@@ -12,6 +12,7 @@ import 'package:http/http.dart' as http;
 import '../services/camera_service.dart';
 import '../constants.dart';
 import 'route_assigner_screen.dart';
+import '../widgets/trash_pinpoint_marker.dart';
 
 class TrailSegment {
   final LatLng start;
@@ -240,6 +241,12 @@ class _MapScreenState extends State<MapScreen> {
             final data = doc.data();
             data['id'] = doc.id;
             return data;
+          }).where((spot) {
+            final mv = spot['model_version'] ?? spot['modelVersion'];
+            if (mv == null) return false;
+            if (mv == MODEL_VERSION) return true;
+            final s = mv.toString().toLowerCase().trim();
+            return s == MODEL_VERSION.toString() || s == 'v$MODEL_VERSION';
           }).toList();
         });
       }
@@ -440,6 +447,50 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
+  List<Marker> _buildUniformTrashMarkers(List<Map<String, dynamic>> spots) {
+    const double clusterDist = 0.00018; // ~18-20 meters clustering to avoid clumping
+    final List<List<Map<String, dynamic>>> clusters = [];
+
+    for (var spot in spots) {
+      final lat = (spot['lat'] as num?)?.toDouble() ?? 0.0;
+      final lng = (spot['lng'] as num?)?.toDouble() ?? 0.0;
+      if (lat == 0.0 && lng == 0.0) continue;
+
+      bool added = false;
+      for (var c in clusters) {
+        final cLat = (c.first['lat'] as num).toDouble();
+        final cLng = (c.first['lng'] as num).toDouble();
+        if ((lat - cLat).abs() < clusterDist && (lng - cLng).abs() < clusterDist) {
+          c.add(spot);
+          added = true;
+          break;
+        }
+      }
+      if (!added) {
+        clusters.add([spot]);
+      }
+    }
+
+    return clusters.map((cluster) {
+      final rep = cluster.first;
+      final lat = (rep['lat'] as num).toDouble();
+      final lng = (rep['lng'] as num).toDouble();
+      final isVeryDirty = cluster.any((s) => s['road_status'] == 'Very Dirty Road' || s['road_status'] == 'Very_Dirty');
+
+      return Marker(
+        point: LatLng(lat, lng),
+        width: 38,
+        height: 46,
+        alignment: Alignment.topCenter,
+        child: TrashPinpointWidget(
+          count: cluster.length,
+          isVeryDirty: isVeryDirty,
+          onTap: () => _showTrashPopup(rep),
+        ),
+      );
+    }).toList();
+  }
+
   void _showAnalyticsPopup() {
     final telemetry = context.read<TelemetryService>();
     final camera = context.read<CameraService>();
@@ -622,50 +673,9 @@ class _MapScreenState extends State<MapScreen> {
                   }).toList(),
                 ),
                 
-              if (_trashSpots.isNotEmpty && _showFlags && _isZoomedInForFlags)
+              if (_trashSpots.isNotEmpty && _showFlags)
                 MarkerLayer(
-                  markers: _trashSpots.map((spot) {
-                    final lat = spot['lat'] as double;
-                    final lng = spot['lng'] as double;
-                    final isVeryDirty = spot['road_status'] == 'Very Dirty Road';
-                    final markerColor = isVeryDirty ? Colors.redAccent : Colors.orangeAccent;
-                    
-                    return Marker(
-                      point: LatLng(lat, lng),
-                      width: 60,
-                      height: 80,
-                      child: GestureDetector(
-                        onTap: () => _showTrashPopup(spot),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            // Thumbnail above the flag
-                            if (spot['image_url'] != null)
-                              Container(
-                                width: 40,
-                                height: 40,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  border: Border.all(color: Colors.white, width: 2),
-                                  boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 4, offset: Offset(0, 2))],
-                                  image: DecorationImage(
-                                    image: NetworkImage(spot['image_url']),
-                                    fit: BoxFit.cover,
-                                  ),
-                                ),
-                              ),
-                            // The flag symbol
-                            Icon(
-                              Icons.tour_rounded,
-                              color: markerColor,
-                              size: 32,
-                              shadows: const [Shadow(color: Colors.black45, blurRadius: 4, offset: Offset(0, 2))],
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  }).toList(),
+                  markers: _buildUniformTrashMarkers(_trashSpots),
                 ),
 
               if (currentPos != null)

@@ -17,6 +17,7 @@ import '../services/map_cache_service.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'garbage_spots_screen.dart';
 import '../services/role_service.dart';
+import '../constants.dart';
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
 
@@ -139,6 +140,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
         setState(() {
           _trashSpots = snapshot.docs.where((doc) {
             final data = doc.data();
+            final mv = data['model_version'] ?? data['modelVersion'];
+            if (mv != null) {
+              final s = mv.toString().toLowerCase().trim();
+              if (s != MODEL_VERSION.toString() && s != 'v$MODEL_VERSION') return false;
+            } else {
+              return false;
+            }
             final status = data['status'] ?? 'Flagged';
             final roadStatus = data['road_status'] ?? '';
             return status != 'Resolved' && (roadStatus == 'Trash Detected' || roadStatus == 'Very Dirty Road' || roadStatus == 'Slightly Dirty Road');
