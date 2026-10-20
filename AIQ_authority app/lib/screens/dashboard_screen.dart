@@ -20,6 +20,8 @@ import '../services/role_service.dart';
 import '../constants.dart';
 import '../widgets/trash_pinpoint_marker.dart';
 import '../services/ward_zone_service.dart';
+import '../services/trash_spots_service.dart';
+import '../models/garbage_flag.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -45,6 +47,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<Ward> _wardsList = [];
   List<Zone> _zonesList = [];
   List<Map<String, dynamic>> _trashSpots = [];
+  List<Map<String, dynamic>> _roadTrailSpots = [];
   StreamSubscription<QuerySnapshot>? _vehiclesSub;
   StreamSubscription<QuerySnapshot>? _wardsSub;
   StreamSubscription<QuerySnapshot>? _zonesSub;
@@ -123,13 +126,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
         final data = doc.data();
         _liveTrackingData[doc.id] = data;
         
-        final lat = data['lat'] as double?;
-        final lng = data['lng'] as double?;
+        final lat = (data['lat'] as num?)?.toDouble();
+        final lng = (data['lng'] as num?)?.toDouble();
         final isActive = data['isActive'] as bool? ?? false;
         final Timestamp? timestamp = data['timestamp'] as Timestamp?;
 
         if (lat != null && lng != null && mounted) {
-          final index = _vehicles.indexWhere((v) => v.vehicleNumber == doc.id || v.id == doc.id);
+          final cleanDocId = doc.id.toLowerCase().replaceAll(RegExp(r'[\s\-_]'), '');
+          final index = _vehicles.indexWhere((v) {
+            if (v.vehicleNumber == doc.id || v.id == doc.id) return true;
+            final cleanV = v.vehicleNumber.toLowerCase().replaceAll(RegExp(r'[\s\-_]'), '');
+            return cleanV == cleanDocId || v.id.toLowerCase() == cleanDocId;
+          });
           if (index != -1) {
             _vehicles[index].currentLocation = LatLng(lat, lng);
             _vehicles[index].isActive = isActive;
@@ -147,41 +155,71 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     _trashSub = FirebaseFirestore.instance.collection('trash_spots').snapshots().listen((snapshot) {
       if (mounted) {
-        setState(() {
-          _trashSpots = snapshot.docs.where((doc) {
-            final data = doc.data();
-            final mv = data['model_version'] ?? data['modelVersion'];
-            if (mv != null) {
-              final s = mv.toString().toLowerCase().trim();
-              if (s != MODEL_VERSION.toString() && s != 'v$MODEL_VERSION') return false;
-            } else {
-              return false;
-            }
-            final status = data['status'] ?? 'Flagged';
-            final roadStatus = data['road_status'] ?? '';
-            return status != 'Resolved' && status != 'Deflagged' && roadStatus == 'Trash Detected';
-          }).map((doc) {
-            final data = doc.data();
-            data['id'] = doc.id;
-            return data;
-          }).toList();
-        });
-
-        if (!_initialMapCentered && _trashSpots.isNotEmpty) {
-          _initialMapCentered = true;
-          try {
-            final firstLat = (_trashSpots.first['lat'] as num).toDouble();
-            final firstLng = (_trashSpots.first['lng'] as num).toDouble();
-            _mapController.move(LatLng(firstLat, firstLng), 14.0);
-          } catch (_) {}
-        }
+        _updateDashboardTrashSpots();
       }
     });
+
+    TrashSpotsService.instance.flagsNotifier.addListener(_onTrashSpotsUpdate);
+    _updateDashboardTrashSpots();
+  }
+
+  void _onTrashSpotsUpdate() {
+    if (mounted) _updateDashboardTrashSpots();
+  }
+
+  void _updateDashboardTrashSpots() {
+    final active = TrashSpotsService.instance.activeFlags;
+    final allRoad = TrashSpotsService.instance.allFlags;
+    setState(() {
+      _trashSpots = active.map((f) => {
+        'id': f.id,
+        'lat': f.lat,
+        'lng': f.lng,
+        'road_status': f.displayClass.isNotEmpty ? f.displayClass : 'Trash Detected',
+        'display_class': f.displayClass,
+        'class': f.className,
+        'confidence': f.confidence,
+        'image_url': f.imageUrl,
+        'timestamp': Timestamp.fromDate(DateTime.tryParse(f.timestamp) ?? DateTime.now()),
+        'status': f.status,
+        'vehicle_number': f.vehicleNumber,
+        'ward': f.ward,
+        'zone': f.zone,
+        'session_id': f.sessionId,
+      }).toList();
+      _roadTrailSpots = allRoad.map((f) => {
+        'id': f.id,
+        'lat': f.lat,
+        'lng': f.lng,
+        'road_status': f.displayClass.isNotEmpty ? f.displayClass : 'Clean Road',
+        'display_class': f.displayClass,
+        'class': f.className,
+        'confidence': f.confidence,
+        'image_url': f.imageUrl,
+        'timestamp': Timestamp.fromDate(DateTime.tryParse(f.timestamp) ?? DateTime.now()),
+        'status': f.status,
+        'vehicle_number': f.vehicleNumber,
+        'ward': f.ward,
+        'zone': f.zone,
+        'session_id': f.sessionId,
+        'trash_count': f.trashCount,
+      }).toList();
+    });
+
+    if (!_initialMapCentered && _trashSpots.isNotEmpty) {
+      _initialMapCentered = true;
+      try {
+        final firstLat = (_trashSpots.first['lat'] as num).toDouble();
+        final firstLng = (_trashSpots.first['lng'] as num).toDouble();
+        _mapController.move(LatLng(firstLat, firstLng), 14.0);
+      } catch (_) {}
+    }
   }
 
   @override
   void dispose() {
     WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
+    TrashSpotsService.instance.flagsNotifier.removeListener(_onTrashSpotsUpdate);
     _liveTrackingSub?.cancel();
     _vehiclesSub?.cancel();
     _wardsSub?.cancel();
@@ -286,6 +324,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
           if (!_isWardInZone(ward, zone)) return false;
         } catch (_) {}
       }
+      return true;
+    }).toList();
+  }
+
+  List<Map<String, dynamic>> get _filteredTrashSpots {
+    return _trashSpots.where((spot) {
+      final lat = ((spot['lat'] ?? 0.0) as num).toDouble();
+      final lng = ((spot['lng'] ?? 0.0) as num).toDouble();
+      final zone = spot['zone']?.toString();
+      final ward = spot['ward']?.toString();
+
+      if (!RoleService.isSpotAllowed(lat, lng, zone, ward, 'Master Dashboard')) {
+        return false;
+      }
+
+      if (_selectedZone != 'All Zones' &&
+          !WardZoneService.instance.matchesZone(lat: lat, lng: lng, docZone: zone, targetZone: _selectedZone)) {
+        return false;
+      }
+
+      if (_selectedWard != 'All Wards' &&
+          !WardZoneService.instance.matchesWard(lat: lat, lng: lng, docWard: ward, targetWard: _selectedWard)) {
+        return false;
+      }
+
       return true;
     }).toList();
   }
@@ -1377,7 +1440,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       onTap: () {
         Navigator.push(context, MaterialPageRoute(builder: (context) => const GarbageSpotsScreen()));
       },
-      child: _buildNewKpiCard('Garbage Spots', '${_trashSpots.length}', 'Spots', LucideIcons.trash, const Color(0xFF198754), '+ 18%', isMobile: isMobile),
+      child: _buildNewKpiCard('Garbage Spots', '${_filteredTrashSpots.length}', 'Spots', LucideIcons.trash, const Color(0xFF198754), '+ 18%', isMobile: isMobile),
     );
     final card3 = _buildNewKpiCard('Potholes', '215', 'Potholes', LucideIcons.alertTriangle, const Color(0xFFFFC107), '+ 15%', isMobile: isMobile);
     final card4 = _buildNewKpiCard('Vehicle Anomalies', '18', 'Detected', LucideIcons.alertOctagon, const Color(0xFFDC3545), '- 5%', isPositive: false, isMobile: isMobile);
@@ -1487,18 +1550,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildMapCard({bool isFullScreen = false}) {
-    // --- Compute Polylines and Markers from _trashSpots ---
+    // --- Compute Polylines and Markers from road trail and trash spots ---
     Map<String, List<Map<String, dynamic>>> sessions = {};
-    for (var spot in _trashSpots) {
-      if (spot['session_id'] != null) {
-        sessions.putIfAbsent(spot['session_id'], () => []).add(spot);
-      }
+    final trailSource = _roadTrailSpots.isNotEmpty ? _roadTrailSpots : _trashSpots;
+    for (var spot in trailSource) {
+      final key = (spot['session_id'] ?? spot['vehicle_number'] ?? 'default_track').toString();
+      sessions.putIfAbsent(key, () => []).add(spot);
     }
 
     List<Polyline> routePolylines = [];
     List<Marker> customTrashMarkers = [];
 
-    // Process sessions into polylines
+    // Process sessions into polylines with accurate 3-way color mapping
     sessions.forEach((sessionId, list) {
       list.sort((a, b) {
         final tA = a['timestamp'] as Timestamp?;
@@ -1510,13 +1573,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
       });
 
       for (int i = 0; i < list.length - 1; i++) {
-        final start = LatLng(list[i]['lat'] as double, list[i]['lng'] as double);
-        final end = LatLng(list[i + 1]['lat'] as double, list[i + 1]['lng'] as double);
-        final status = list[i + 1]['road_status'];
+        final startLat = ((list[i]['lat'] ?? 0.0) as num).toDouble();
+        final startLng = ((list[i]['lng'] ?? 0.0) as num).toDouble();
+        final endLat = ((list[i + 1]['lat'] ?? 0.0) as num).toDouble();
+        final endLng = ((list[i + 1]['lng'] ?? 0.0) as num).toDouble();
+
+        if (startLat == 0.0 || endLat == 0.0) continue;
+
+        final start = LatLng(startLat, startLng);
+        final end = LatLng(endLat, endLng);
+        final dist = const Distance().as(LengthUnit.Meter, start, end);
+        if (dist > 60.0) continue; // Never connect distant trash flags
+        final status = (list[i + 1]['road_status'] ?? list[i + 1]['display_class'] ?? list[i + 1]['class'] ?? '').toString();
+        final sLower = status.toLowerCase();
+        final isNoTrash = sLower.contains('no trash') || sLower.contains('no_trash') || sLower.contains('clean');
         
-        Color segmentColor = Colors.greenAccent;
-        if (status == 'Very Dirty Road' || status == 'Trash Detected') segmentColor = Colors.redAccent;
-        else if (status == 'Slightly Dirty Road') segmentColor = Colors.yellowAccent;
+        Color segmentColor = const Color(0xFF00E676); // Vibrant Green (Clean Road / No Trash Detected)
+        if (status == 'Very Dirty Road' || status == 'Very_Dirty' || status.contains('Very Dirty')) {
+          segmentColor = const Color(0xFFFF1744); // Vibrant Red (Very Dirty Road)
+        } else if (!isNoTrash && (status == 'Trash Detected' || status == 'Trash_Detected' || status.contains('Trash') || (list[i + 1]['trash_count'] ?? 0) > 0)) {
+          segmentColor = const Color(0xFFFF9100); // Vibrant Amber / Orange (Trash Detected)
+        }
         
         routePolylines.add(Polyline(
           points: [start, end],
@@ -1530,7 +1607,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
     const double clusterDist = 0.00018;
     final List<List<Map<String, dynamic>>> clusters = [];
 
-    for (var spot in _trashSpots) {
+    for (var spot in _filteredTrashSpots) {
+      final isTrash = GarbageFlag.isTrashDetectedSpot(
+        roadStatus: spot['road_status']?.toString(),
+        displayClass: spot['display_class']?.toString(),
+        className: spot['class']?.toString(),
+        trashCount: (spot['trash_count'] as num?)?.toInt(),
+      );
+      if (!isTrash) continue;
+
       final lat = (spot['lat'] as num).toDouble();
       final lng = (spot['lng'] as num).toDouble();
       bool added = false;
@@ -1656,7 +1741,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 ),
                               ),
                             ),
-                          ..._filteredVehicles.where((v) => v.currentLocation != null && v.isRunning).map((vehicle) {
+                          ..._filteredVehicles.where((v) => v.currentLocation != null).map((vehicle) {
                             return Marker(
                               point: vehicle.currentLocation!, width: 100, height: 60,
                               alignment: Alignment.center,

@@ -29,9 +29,15 @@ class TrailSegment {
   };
 
   factory TrailSegment.fromJson(Map<String, dynamic> json) => TrailSegment(
-    start: LatLng(json['startLat'], json['startLng']),
-    end: LatLng(json['endLat'], json['endLng']),
-    color: Color(json['color']),
+    start: LatLng(
+      ((json['startLat'] ?? json['start_lat'] ?? 0.0) as num).toDouble(),
+      ((json['startLng'] ?? json['start_lng'] ?? 0.0) as num).toDouble(),
+    ),
+    end: LatLng(
+      ((json['endLat'] ?? json['end_lat'] ?? 0.0) as num).toDouble(),
+      ((json['endLng'] ?? json['end_lng'] ?? 0.0) as num).toDouble(),
+    ),
+    color: Color((json['color'] as num?)?.toInt() ?? 0xFF00E676),
   );
 }
 
@@ -92,6 +98,7 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   void _onLocationUpdate() {
+    // Only trace road when navigation is actively running
     if (!mounted || !_isNavigating) return;
     
     final telemetry = context.read<TelemetryService>();
@@ -103,22 +110,53 @@ class _MapScreenState extends State<MapScreen> {
       if (_lastRecordedPosition != null) {
         final distance = const Distance().as(LengthUnit.Meter, _lastRecordedPosition!, currentLoc);
         
-        // Add a segment if moved more than 50 meters to improve tracing accuracy and prevent API rate-limits
-        if (distance > 50.0) {
-          final cameraService = context.read<CameraService>();
-          final status = cameraService.latestRoadStatus;
-          
-          Color segmentColor = Colors.blueAccent; // Default color
-          if (status == 'Clean Road') segmentColor = Colors.greenAccent;
-          else if (status == 'Slightly Dirty Road') segmentColor = Colors.orangeAccent;
-          else if (status == 'Very Dirty Road') segmentColor = Colors.redAccent;
+        // Ignore tiny jitter when vehicle is stationary or creeping (< 8 meters)
+        if (distance < 8.0) return;
 
-          final start = _lastRecordedPosition!;
-          final end = currentLoc;
+        // Protection against GPS jumps/teleports: do not draw straight line across town
+        if (distance > 150.0) {
           _lastRecordedPosition = currentLoc;
-
-          _fetchSnappedRoute(start, end, segmentColor);
+          return;
         }
+
+        final cameraService = context.read<CameraService>();
+        final isCameraOn = cameraService.isCameraOn;
+
+        // Road tracing color rules:
+        // 1. If camera is OFF: Normal blue color (Google Maps Navigation Blue: 0xFF2196F3)
+        // 2. If camera is ON (scanning / auto-capturing):
+        //    - Clean road or No Trash Detected: Vibrant Green (0xFF00E676)
+        //    - Trash detected: Vibrant Orange (0xFFFF9100)
+        //    - Very dirty road: Vibrant Red (0xFFFF1744)
+        Color segmentColor;
+        if (isCameraOn) {
+          final status = cameraService.latestRoadStatus;
+          final sLower = status.toLowerCase().trim();
+          
+          final isNoTrashOrClean = sLower.contains('clean') ||
+                                   sLower.contains('no trash') ||
+                                   sLower.contains('no_trash') ||
+                                   sLower == 'unknown' ||
+                                   sLower.isEmpty;
+
+          if (status == 'Very Dirty Road' || status == 'Very_Dirty' || sLower.contains('very dirty') || sLower.contains('very_dirty')) {
+            segmentColor = const Color(0xFFFF1744); // Red for Very Dirty Road
+          } else if (!isNoTrashOrClean && (status == 'Trash Detected' || status == 'Slightly Dirty Road' || status == 'Trash_Detected' || sLower.contains('trash') || sLower.contains('dirty'))) {
+            segmentColor = const Color(0xFFFF9100); // Orange for Trash Detected
+          } else {
+            // Clean road or No Trash Detected: Vibrant Green
+            segmentColor = const Color(0xFF00E676);
+          }
+        } else {
+          // Camera off: Standard Navigation Blue
+          segmentColor = const Color(0xFF2196F3);
+        }
+
+        final start = _lastRecordedPosition!;
+        final end = currentLoc;
+        _lastRecordedPosition = currentLoc;
+
+        _fetchSnappedRoute(start, end, segmentColor);
       } else {
         _lastRecordedPosition = currentLoc;
       }
@@ -127,8 +165,8 @@ class _MapScreenState extends State<MapScreen> {
 
   Future<void> _fetchSnappedRoute(LatLng start, LatLng end, Color color) async {
     try {
-      final url = 'http://router.project-osrm.org/route/v1/driving/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=geojson';
-      final response = await http.get(Uri.parse(url));
+      final url = 'https://router.project-osrm.org/route/v1/driving/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=geojson';
+      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 3));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['routes'] != null && data['routes'].isNotEmpty) {
@@ -166,8 +204,10 @@ class _MapScreenState extends State<MapScreen> {
       debugPrint("OSRM error: $e");
     }
     
-    // Fallback to straight line if OSRM fails
-    if (mounted) {
+    // Fallback: only connect as a short straight segment if close (<= 25 meters)
+    // Never draw long straight lines cutting across houses or blocks
+    final distance = const Distance().as(LengthUnit.Meter, start, end);
+    if (mounted && distance <= 25.0) {
       final seg = TrailSegment(start: start, end: end, color: color);
       setState(() {
         _navigationTrail.add(seg);
@@ -244,9 +284,30 @@ class _MapScreenState extends State<MapScreen> {
           }).where((spot) {
             final mv = spot['model_version'] ?? spot['modelVersion'];
             if (mv == null) return false;
-            if (mv == MODEL_VERSION) return true;
             final s = mv.toString().toLowerCase().trim();
-            return s == MODEL_VERSION.toString() || s == 'v$MODEL_VERSION';
+            final matchesModel = (mv == MODEL_VERSION || s == MODEL_VERSION.toString() || s == 'v$MODEL_VERSION');
+            if (!matchesModel) return false;
+
+            // Only flag actual trash detections
+            final roadStatus = (spot['road_status'] ?? '').toString().toLowerCase().trim();
+            final displayClass = (spot['display_class'] ?? '').toString().toLowerCase().trim();
+            final className = (spot['class'] ?? '').toString().toLowerCase().trim();
+
+            if (roadStatus.contains('no trash') || roadStatus.contains('no_trash') || roadStatus.contains('clean') || roadStatus.contains('not a road') ||
+                displayClass.contains('no trash') || displayClass.contains('no_trash') || displayClass.contains('clean') || displayClass.contains('not a road') ||
+                className.contains('no trash') || className.contains('no_trash') || className.contains('clean') || className.contains('not a road')) {
+              return false;
+            }
+
+            final trashCount = (spot['trash_count'] as num?)?.toInt();
+            if (trashCount != null && trashCount <= 0 && !roadStatus.contains('dirty') && !displayClass.contains('dirty') && !className.contains('dirty')) {
+              return false;
+            }
+
+            return roadStatus.contains('trash') || roadStatus.contains('dirty') ||
+                   displayClass.contains('trash') || displayClass.contains('dirty') ||
+                   className.contains('trash') || className.contains('dirty') ||
+                   (trashCount != null && trashCount > 0);
           }).toList();
         });
       }
@@ -817,6 +878,66 @@ class _MapScreenState extends State<MapScreen> {
           
 
           
+          // Road Tracing Mode Status Pill (when navigating)
+          if (_isNavigating)
+            Positioned(
+              bottom: 200,
+              left: 24,
+              right: 24,
+              child: Consumer<CameraService>(
+                builder: (context, camera, _) {
+                  final isCamOn = camera.isCameraOn;
+                  final isModConn = camera.isModelConnected;
+                  final isVisionActive = isCamOn && isModConn;
+
+                  return Center(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0F172A).withOpacity(0.92),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: isVisionActive ? const Color(0xFF10B981) : const Color(0xFF3B82F6),
+                          width: 1.5,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: (isVisionActive ? const Color(0xFF10B981) : const Color(0xFF3B82F6)).withOpacity(0.3),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 10,
+                            height: 10,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: isVisionActive ? const Color(0xFF10B981) : const Color(0xFF3B82F6),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            isVisionActive
+                                ? 'AI Road Tracing: Clean (🟢) | Trash (🟠) | Dirty (🔴)'
+                                : 'Navigation Tracing: Standard Blue (Camera/Model Off)',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+
           // Navigation UI Overlay
           Positioned(
             bottom: 140, // Ensure it sits well above the floating dock on small screens

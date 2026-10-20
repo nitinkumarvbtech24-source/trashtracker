@@ -25,6 +25,8 @@ import 'alerts_screen.dart';
 import '../models/garbage_flag.dart';
 import '../widgets/trash_pinpoint_marker.dart';
 import '../services/ward_zone_service.dart';
+import '../services/trash_spots_service.dart';
+import '../services/role_service.dart';
 
 class CleanlinessScreen extends StatefulWidget {
   const CleanlinessScreen({super.key});
@@ -55,6 +57,7 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
   StreamSubscription? _wardsSub;
 
   List<GarbageFlag> _garbageFlags = [];
+  List<GarbageFlag> _allRoadFlags = [];
   Timer? _garbageTimer;
 
   String get _todayDateString => DateTime.now().toIso8601String().split('T')[0];
@@ -82,69 +85,144 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
   }
 
   void _fetchGarbageFlagsFromFirestore() {
+    TrashSpotsService.instance.flagsNotifier.addListener(_onTrashSpotsUpdated);
+    _updateGarbageFlags();
+
     _trashSub = FirebaseFirestore.instance.collection('trash_spots').snapshots().listen((snapshot) {
       if (!mounted) return;
-      setState(() {
-        _garbageFlags = snapshot.docs
-            .map((doc) => GarbageFlag.fromJson(doc.data(), doc.id))
-            .where((f) => f.status != 'Resolved' && f.status != 'Deflagged' && f.matchesModelVersion(MODEL_VERSION) && (f.className == 'Trash_Detected' || f.displayClass == 'Trash Detected'))
-            .toList();
-      });
-      _recalculatePolylines();
-
-      if (!_initialMapCentered && _garbageFlags.isNotEmpty) {
-        _initialMapCentered = true;
-        try {
-          _mapController.move(LatLng(_garbageFlags.first.lat, _garbageFlags.first.lng), 14.0);
-        } catch (_) {}
-      }
+      _updateGarbageFlags();
     });
   }
 
+  void _onTrashSpotsUpdated() {
+    if (mounted) _updateGarbageFlags();
+  }
+
+  void _updateGarbageFlags() {
+    final active = TrashSpotsService.instance.activeFlags;
+    final allRoad = TrashSpotsService.instance.allFlags;
+    setState(() {
+      _garbageFlags = active;
+      _allRoadFlags = allRoad;
+    });
+    _recalculatePolylines();
+
+    if (!_initialMapCentered && _garbageFlags.isNotEmpty) {
+      _initialMapCentered = true;
+      try {
+        _mapController.move(LatLng(_garbageFlags.first.lat, _garbageFlags.first.lng), 14.0);
+      } catch (_) {}
+    }
+  }
+
   Future<void> _recalculatePolylines() async {
+    final sourceFlags = _allRoadFlags.isNotEmpty ? _allRoadFlags : _garbageFlags;
     Map<String, List<GarbageFlag>> sessions = {};
-    for (var flag in _garbageFlags) {
-      if (flag.sessionId != null) {
-        sessions.putIfAbsent(flag.sessionId!, () => []).add(flag);
-      }
+    for (var flag in sourceFlags) {
+      final key = flag.sessionId ?? (flag.vehicleNumber.isNotEmpty ? flag.vehicleNumber : 'default_track');
+      sessions.putIfAbsent(key, () => []).add(flag);
     }
 
-    List<Polyline> newPolylines = [];
+    List<Polyline> instantPolylines = [];
+    List<Map<String, dynamic>> segmentJobs = [];
 
     for (var list in sessions.values) {
       list.sort((a, b) => a.timestamp.compareTo(b.timestamp));
       for (int i = 0; i < list.length - 1; i++) {
         final start = LatLng(list[i].lat, list[i].lng);
         final end = LatLng(list[i + 1].lat, list[i + 1].lng);
-        final status = list[i + 1].className;
+        final dist = const Distance().as(LengthUnit.Meter, start, end);
         
-        Color segmentColor = Colors.greenAccent;
-        if (status == 'Very_Dirty') segmentColor = Colors.redAccent;
-        else if (status == 'Slightly_Dirty') segmentColor = Colors.orangeAccent;
+        // Never connect distant trash flags (> 80m) - avoids cross-city diagonal lines
+        if (dist > 80.0) continue;
 
+        final flag = list[i + 1];
+        final status = (flag.displayClass.isNotEmpty ? flag.displayClass : flag.className);
+        final sLower = status.toLowerCase();
+        final isNoTrash = sLower.contains('no trash') || sLower.contains('no_trash') || sLower.contains('clean');
+        
+        // Accurate 3-way Road Cleanliness Color Mapping
+        Color segmentColor = const Color(0xFF00E676); // Vibrant Green (Clean Road / No Trash Detected)
+        if (flag.className == 'Very_Dirty' || flag.displayClass == 'Very Dirty' || flag.displayClass == 'Very Dirty Road' || status.contains('Very Dirty')) {
+          segmentColor = const Color(0xFFFF1744); // Vibrant Red (Very Dirty Road)
+        } else if (!isNoTrash && (flag.isTrashDetected || flag.className == 'Trash_Detected' || status.contains('Trash') || flag.trashCount > 0)) {
+          segmentColor = const Color(0xFFFF9100); // Vibrant Amber / Orange (Trash Detected)
+        }
+
+        if (dist <= 25.0) {
+          instantPolylines.add(Polyline(
+            points: [start, end],
+            color: segmentColor,
+            strokeWidth: 6.0,
+            borderStrokeWidth: 1.0,
+            borderColor: Colors.black12,
+          ));
+        }
+
+        segmentJobs.add({
+          'start': start,
+          'end': end,
+          'color': segmentColor,
+          'distance': dist,
+        });
+      }
+    }
+
+    // Immediately show the road colored polylines with zero latency
+    if (mounted) {
+      setState(() {
+        _snappedPolylines = instantPolylines;
+      });
+    }
+
+    // Asynchronously enhance segments with OSRM road snapping in parallel
+    if (segmentJobs.isEmpty) return;
+
+    try {
+      final snappedResults = await Future.wait(segmentJobs.map((job) async {
+        final start = job['start'] as LatLng;
+        final end = job['end'] as LatLng;
+        final color = job['color'] as Color;
+        final dist = (job['distance'] as num?)?.toDouble() ?? 50.0;
         try {
-          final url = 'http://router.project-osrm.org/route/v1/driving/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=geojson';
-          final response = await http.get(Uri.parse(url));
+          final url = 'https://router.project-osrm.org/route/v1/driving/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=geojson';
+          final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 3));
           if (response.statusCode == 200) {
             final data = json.decode(response.body);
             if (data['routes'] != null && data['routes'].isNotEmpty) {
               final coords = data['routes'][0]['geometry']['coordinates'] as List;
               final snappedPoints = coords.map((c) => LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble())).toList();
-              newPolylines.add(Polyline(points: snappedPoints, color: segmentColor, strokeWidth: 6.0));
-              continue;
+              if (snappedPoints.length >= 2) {
+                return Polyline(
+                  points: snappedPoints,
+                  color: color,
+                  strokeWidth: 6.0,
+                  borderStrokeWidth: 1.0,
+                  borderColor: Colors.black12,
+                );
+              }
             }
           }
         } catch (_) {}
-        // Fallback to straight line
-        newPolylines.add(Polyline(points: [start, end], color: segmentColor, strokeWidth: 6.0));
-      }
-    }
+        // Fallback: only if points are close together
+        if (dist <= 25.0) {
+          return Polyline(
+            points: [start, end],
+            color: color,
+            strokeWidth: 6.0,
+            borderStrokeWidth: 1.0,
+            borderColor: Colors.black12,
+          );
+        }
+        return Polyline(points: const [], color: Colors.transparent);
+      }));
 
-    if (mounted) {
-      setState(() {
-        _snappedPolylines = newPolylines;
-      });
-    }
+      if (mounted) {
+        setState(() {
+          _snappedPolylines = snappedResults.where((p) => p.points.isNotEmpty).toList();
+        });
+      }
+    } catch (_) {}
   }
 
   void _fetchDataFromFirestore() {
@@ -153,10 +231,21 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
       if (!mounted) return;
       setState(() {
         for (var newVehicle in vehicles) {
-          final liveData = _liveTrackingData[newVehicle.vehicleNumber] ?? _liveTrackingData[newVehicle.id];
+          Map<String, dynamic>? liveData = _liveTrackingData[newVehicle.vehicleNumber] ?? _liveTrackingData[newVehicle.id];
+          if (liveData == null) {
+            final cleanV = newVehicle.vehicleNumber.toLowerCase().replaceAll(RegExp(r'[\s\-_]'), '');
+            for (var entry in _liveTrackingData.entries) {
+              if (entry.key.toLowerCase().replaceAll(RegExp(r'[\s\-_]'), '') == cleanV) {
+                liveData = entry.value;
+                break;
+              }
+            }
+          }
           if (liveData != null) {
-            if (liveData['lat'] != null && liveData['lng'] != null) {
-              newVehicle.currentLocation = LatLng(liveData['lat'], liveData['lng']);
+            final lat = (liveData['lat'] as num?)?.toDouble();
+            final lng = (liveData['lng'] as num?)?.toDouble();
+            if (lat != null && lng != null) {
+              newVehicle.currentLocation = LatLng(lat, lng);
             }
             newVehicle.isActive = liveData['isActive'] ?? false;
             final Timestamp? ts = liveData['timestamp'] as Timestamp?;
@@ -207,7 +296,12 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
         final Timestamp? timestamp = data['timestamp'] as Timestamp?;
 
         if (lat != null && lng != null && mounted) {
-          final index = _vehicles.indexWhere((v) => v.vehicleNumber == doc.id || v.id == doc.id);
+          final cleanDocId = doc.id.toLowerCase().replaceAll(RegExp(r'[\s\-_]'), '');
+          final index = _vehicles.indexWhere((v) {
+            if (v.vehicleNumber == doc.id || v.id == doc.id) return true;
+            final cleanV = v.vehicleNumber.toLowerCase().replaceAll(RegExp(r'[\s\-_]'), '');
+            return cleanV == cleanDocId || v.id.toLowerCase() == cleanDocId;
+          });
           if (index != -1) {
             _vehicles[index].currentLocation = LatLng(lat, lng);
             _vehicles[index].isActive = isActive;
@@ -227,6 +321,7 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
   @override
   void dispose() {
     WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
+    TrashSpotsService.instance.flagsNotifier.removeListener(_onTrashSpotsUpdated);
     _zonesSub?.cancel();
     _garbageTimer?.cancel();
     _liveTrackingSub?.cancel();
@@ -372,6 +467,9 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
   }
 
   Widget _buildFilterBar(bool isDesktop) {
+    final userWard = RoleService.currentUserWard;
+    final userZone = RoleService.currentUserZone;
+
     List<String> availableWards = [];
     if (_selectedZone != 'All Zones') {
       final sZone = _zones.firstWhere((z) => z.name == _selectedZone, orElse: () => Zone(id: '', name: '', boundary: []));
@@ -385,8 +483,21 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
       availableWards = _wards.map((w) => w.name).toList();
     }
     
-    final wards = ['All Wards', ...availableWards.toSet()];
-    final zones = ['All Zones', ..._zones.map((z) => z.name).toSet()];
+    List<String> wards = ['All Wards', ...availableWards.toSet()];
+    List<String> zones = ['All Zones', ..._zones.map((z) => z.name).toSet()];
+
+    if (userWard != null && userWard.trim().isNotEmpty && userWard != 'All Wards') {
+      wards = [userWard];
+      if (_selectedWard != userWard) {
+        _selectedWard = userWard;
+      }
+    }
+    if (userZone != null && userZone.trim().isNotEmpty && userZone != 'All Zones') {
+      zones = [userZone];
+      if (_selectedZone != userZone) {
+        _selectedZone = userZone;
+      }
+    }
 
     final filterContent = Wrap(
       spacing: 16,
@@ -608,9 +719,27 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
   }
 
   
+  List<GarbageFlag> get _filteredGarbageFlags {
+    return _garbageFlags.where((f) {
+      if (!RoleService.isSpotAllowed(f.lat, f.lng, f.zone, f.ward, 'Street Cleanliness AI')) {
+        return false;
+      }
+      if (_selectedZone != 'All Zones' &&
+          !WardZoneService.instance.matchesZone(lat: f.lat, lng: f.lng, docZone: f.zone, targetZone: _selectedZone)) {
+        return false;
+      }
+      if (_selectedWard != 'All Wards' &&
+          !WardZoneService.instance.matchesWard(lat: f.lat, lng: f.lng, docWard: f.ward, targetWard: _selectedWard)) {
+        return false;
+      }
+      return true;
+    }).toList();
+  }
+
   Widget _buildOverallCleanlinessCard(bool isMobile) {
-    int total = _garbageFlags.length;
-    int cleared = _garbageFlags.where((f) => f.status == 'Resolved').length;
+    final list = _filteredGarbageFlags;
+    int total = list.length;
+    int cleared = list.where((f) => f.status == 'Resolved' || f.status == 'Deflagged').length;
     int cleanliness = total == 0 ? 100 : ((cleared / total) * 100).toInt();
     
     return _buildBaseCard(
@@ -642,7 +771,8 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
 
   
   Widget _buildGarbageSpotsDetectedCard(bool isMobile) {
-    int total = _garbageFlags.length;
+    final list = _filteredGarbageFlags;
+    int total = list.where((f) => f.isTrashDetected).length;
     return _buildBaseCard(
       isMobile: isMobile,
       child: Row(
@@ -672,8 +802,9 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
 
   
   Widget _buildSpotsClearedCard(bool isMobile) {
-    int total = _garbageFlags.length;
-    int cleared = _garbageFlags.where((f) => f.status == 'Resolved').length;
+    final list = _filteredGarbageFlags;
+    int total = list.length;
+    int cleared = list.where((f) => f.status == 'Resolved' || f.status == 'Deflagged').length;
 
     return _buildBaseCard(
       isMobile: isMobile,
@@ -710,8 +841,9 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
   }
 
   Widget _buildOfficerResponseCard(bool isMobile) {
-    int total = _garbageFlags.isEmpty ? 342 : _garbageFlags.length;
-    int responded = _garbageFlags.isEmpty ? 227 : _garbageFlags.where((f) => f.status != 'Pending').length;
+    final list = _filteredGarbageFlags;
+    int total = list.length;
+    int responded = list.where((f) => f.status != 'Pending').length;
 
     return _buildBaseCard(
       isMobile: isMobile,
@@ -996,10 +1128,11 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
   }
 
   Widget _buildDonutChartCard() {
-    double total = _garbageFlags.isEmpty ? 1 : _garbageFlags.length.toDouble();
-    double cleanVal = _garbageFlags.where((f) => f.className == 'Clean').length.toDouble();
-    double slightVal = _garbageFlags.where((f) => f.className == 'Slightly_Dirty' || f.displayClass == 'Slightly Dirty').length.toDouble();
-    double dirtyVal = _garbageFlags.where((f) => f.className == 'Trash_Detected' || f.className == 'Very_Dirty' || f.displayClass == 'Trash Detected' || f.displayClass == 'Very Dirty').length.toDouble();
+    final list = _filteredGarbageFlags;
+    double total = list.isEmpty ? 1 : list.length.toDouble();
+    double cleanVal = list.where((f) => f.className == 'Clean').length.toDouble();
+    double slightVal = list.where((f) => f.className == 'Slightly_Dirty' || f.displayClass == 'Slightly Dirty').length.toDouble();
+    double dirtyVal = list.where((f) => f.className == 'Trash_Detected' || f.className == 'Very_Dirty' || f.displayClass == 'Trash Detected' || f.displayClass == 'Very Dirty').length.toDouble();
 
     if (cleanVal == 0 && slightVal == 0 && dirtyVal == 0) {
       cleanVal = 137;
@@ -1007,8 +1140,8 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
       dirtyVal = 85;
       total = cleanVal + slightVal + dirtyVal;
     } else {
-        total = cleanVal + slightVal + dirtyVal;
-        if (total == 0) total = 1;
+      total = cleanVal + slightVal + dirtyVal;
+      if (total == 0) total = 1;
     }
 
     return Container(
@@ -1124,7 +1257,7 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
       builder: (context) => AlertDialog(
         backgroundColor: Colors.white,
         title: Text(
-          ' - ',
+          '${flag.className.replaceAll('_', ' ')} - ${flag.displayClass}',
           style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
         ),
         content: SizedBox(
@@ -1138,6 +1271,11 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
                   child: Image.network(flag.imageUrl, headers: const {"ngrok-skip-browser-warning": "true"},
                     height: 250, 
                     fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Container(
+                      height: 250,
+                      color: Colors.grey.shade200,
+                      child: const Center(child: Icon(Icons.broken_image, size: 40, color: Colors.grey)),
+                    ),
                   ),
                 ),
               ),
@@ -1177,9 +1315,11 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    Text("Confidence: %", style: const TextStyle(color: Colors.black87)),
+                    Text("Confidence: ${(flag.confidence * 100).toStringAsFixed(1)}%", style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w500)),
                     const SizedBox(height: 4),
-                    Text("Vehicle: ", style: const TextStyle(color: Colors.black87)),
+                    Text("Vehicle: ${flag.vehicleNumber}", style: const TextStyle(color: Colors.black87)),
+                    const SizedBox(height: 4),
+                    Text("Location: ${flag.zone} - ${flag.ward}", style: const TextStyle(color: Colors.black54, fontSize: 12)),
                   ],
                 ),
               ),
@@ -1191,19 +1331,12 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('Close', style: TextStyle(color: Colors.black54)),
           ),
-          TextButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Report submitted!')));
-            },
-            child: const Text('Report', style: TextStyle(color: Colors.redAccent)),
-          ),
           ElevatedButton.icon(
             icon: const Icon(Icons.directions_outlined, size: 18),
-            label: const Text('Start'),
+            label: const Text('Directions'),
             style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent, foregroundColor: Colors.white),
             onPressed: () async {
-              final url = Uri.parse('https://www.google.com/maps/dir/?api=1&destination=,');
+              final url = Uri.parse('https://www.google.com/maps/dir/?api=1&destination=${flag.lat},${flag.lng}');
               if (await canLaunchUrl(url)) {
                 await launchUrl(url);
               }
@@ -1230,7 +1363,7 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
     } else {
       routePolylines.add(Polyline(
         points: _selectedVehicleRoute,
-        color: Colors.blueAccent,
+        color: const Color(0xFF00E676), // Vibrant Green for vehicle travelled road
         strokeWidth: 6.0,
       ));
     }
@@ -1238,7 +1371,9 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
     const double clusterDist = 0.00018;
     final List<List<GarbageFlag>> clusters = [];
 
-    for (var flag in _garbageFlags) {
+    final activeFiltered = _filteredGarbageFlags;
+    for (var flag in activeFiltered) {
+      if (!flag.isTrashDetected) continue;
       bool added = false;
       for (var c in clusters) {
         if ((flag.lat - c.first.lat).abs() < clusterDist && (flag.lng - c.first.lng).abs() < clusterDist) {
@@ -1288,6 +1423,54 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
         ...WardZoneService.instance.buildLayers(selectedZone: _selectedZone, selectedWard: _selectedWard),
         PolylineLayer(polylines: routePolylines),
         MarkerLayer(markers: customTrashMarkers),
+        MarkerLayer(
+          markers: _vehicles.where((v) => v.currentLocation != null).map((vehicle) {
+            final statusColor = Color(vehicle.stateColorValue);
+            return Marker(
+              point: vehicle.currentLocation!,
+              width: 90,
+              height: 55,
+              alignment: Alignment.center,
+              child: GestureDetector(
+                onTap: () {
+                  setState(() => _selectedVehicle = vehicle);
+                  _mapController.move(vehicle.currentLocation!, 15.0);
+                },
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1E293B),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: statusColor, width: 1.5),
+                        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
+                      ),
+                      child: Text(
+                        vehicle.vehicleNumber.isNotEmpty ? vehicle.vehicleNumber : vehicle.id,
+                        style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Container(
+                      padding: const EdgeInsets.all(5),
+                      decoration: BoxDecoration(
+                        color: statusColor,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                        boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 4, offset: Offset(0, 2))],
+                      ),
+                      child: const Icon(LucideIcons.truck, color: Colors.white, size: 14),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }).toList(),
+        ),
         
         // Add map controls
         Align(
@@ -1335,6 +1518,7 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
     final baseUrl = activeGarbageAiUrl;
     
     double currentThreshold = 0.25;
+    double veryDirtyThreshold = 0.50;
     bool isLoading = true;
 
     if (!mounted) return;
@@ -1349,7 +1533,8 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
                 if (res.statusCode == 200) {
                   final data = json.decode(res.body);
                   setDialogState(() {
-                    currentThreshold = (data['confidence_threshold'] as num).toDouble();
+                    currentThreshold = (data['confidence_threshold'] as num?)?.toDouble() ?? 0.25;
+                    veryDirtyThreshold = (data['very_dirty_threshold'] as num?)?.toDouble() ?? 0.50;
                     isLoading = false;
                   });
                 } else {
@@ -1360,29 +1545,151 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
               });
             }
             return AlertDialog(
-              title: const Text('AI Model Settings', style: TextStyle(fontWeight: FontWeight.bold)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0F5132).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(LucideIcons.sliders, color: Color(0xFF0F5132), size: 20),
+                  ),
+                  const SizedBox(width: 12),
+                  const Text('AI Model Settings', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                ],
+              ),
               content: isLoading 
-                ? const SizedBox(height: 100, child: Center(child: CircularProgressIndicator(color: Color(0xFF0F5132))))
-                : Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Detection Confidence Threshold', style: TextStyle(fontWeight: FontWeight.w600)),
-                      const SizedBox(height: 8),
-                      Text('Current: ${(currentThreshold * 100).toInt()}%', style: const TextStyle(color: Colors.grey)),
-                      Slider(
-                        value: currentThreshold,
-                        min: 0.1,
-                        max: 0.9,
-                        divisions: 16,
-                        activeColor: const Color(0xFF0F5132),
-                        label: '${(currentThreshold * 100).toInt()}%',
-                        onChanged: (val) {
-                          setDialogState(() => currentThreshold = val);
-                        },
-                      ),
-                      const Text('Lower threshold = more detections, higher false positives.\nHigher threshold = fewer detections, more accurate.', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                    ],
+                ? const SizedBox(height: 140, child: Center(child: CircularProgressIndicator(color: Color(0xFF0F5132))))
+                : SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Section 1: Very Dirty Road Confidence Level Setter (MobileNetV3)
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.red.withOpacity(0.06),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.red.withOpacity(0.2)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Row(
+                                    children: const [
+                                      Icon(Icons.warning_amber_rounded, size: 18, color: Colors.red),
+                                      SizedBox(width: 6),
+                                      Text('Very Dirty Road Confidence', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.red)),
+                                    ],
+                                  ),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.red.withOpacity(0.15),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Text('${(veryDirtyThreshold * 100).toInt()}%', style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 13)),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Slider(
+                                value: veryDirtyThreshold,
+                                min: 0.20,
+                                max: 0.95,
+                                divisions: 15,
+                                activeColor: Colors.redAccent,
+                                label: '${(veryDirtyThreshold * 100).toInt()}%',
+                                onChanged: (val) {
+                                  setDialogState(() => veryDirtyThreshold = val);
+                                },
+                              ),
+                              Wrap(
+                                spacing: 6,
+                                children: [0.35, 0.50, 0.70, 0.85].map((preset) {
+                                  final isSel = (veryDirtyThreshold - preset).abs() < 0.03;
+                                  return ChoiceChip(
+                                    label: Text('${(preset * 100).toInt()}%', style: TextStyle(fontSize: 11, color: isSel ? Colors.white : Colors.black87)),
+                                    selected: isSel,
+                                    selectedColor: Colors.redAccent,
+                                    backgroundColor: Colors.white,
+                                    onSelected: (_) => setDialogState(() => veryDirtyThreshold = preset),
+                                    visualDensity: VisualDensity.compact,
+                                  );
+                                }).toList(),
+                              ),
+                              const SizedBox(height: 6),
+                              const Text('MobileNetV3 classifier threshold required to escalate trash-detected road frames to "VERY DIRTY ROAD" (red alert).', style: TextStyle(fontSize: 11, color: Colors.black54)),
+                            ],
+                          ),
+                        ),
+
+                        const SizedBox(height: 16),
+
+                        // Section 2: YOLO Detection Confidence
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF0F5132).withOpacity(0.04),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFF0F5132).withOpacity(0.15)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  const Text('YOLO Detection Confidence', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF0F5132))),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF0F5132).withOpacity(0.12),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Text('${(currentThreshold * 100).toInt()}%', style: const TextStyle(color: Color(0xFF0F5132), fontWeight: FontWeight.bold, fontSize: 13)),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Slider(
+                                value: currentThreshold,
+                                min: 0.1,
+                                max: 0.9,
+                                divisions: 16,
+                                activeColor: const Color(0xFF0F5132),
+                                label: '${(currentThreshold * 100).toInt()}%',
+                                onChanged: (val) {
+                                  setDialogState(() => currentThreshold = val);
+                                },
+                              ),
+                              Wrap(
+                                spacing: 6,
+                                children: [0.15, 0.25, 0.40, 0.60].map((preset) {
+                                  final isSel = (currentThreshold - preset).abs() < 0.03;
+                                  return ChoiceChip(
+                                    label: Text('${(preset * 100).toInt()}%', style: TextStyle(fontSize: 11, color: isSel ? Colors.white : Colors.black87)),
+                                    selected: isSel,
+                                    selectedColor: const Color(0xFF0F5132),
+                                    backgroundColor: Colors.white,
+                                    onSelected: (_) => setDialogState(() => currentThreshold = preset),
+                                    visualDensity: VisualDensity.compact,
+                                  );
+                                }).toList(),
+                              ),
+                              const SizedBox(height: 6),
+                              const Text('Initial candidate threshold: Lower = more detections, higher false positives; Higher = strictly visible trash.', style: TextStyle(fontSize: 11, color: Colors.black54)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
               actions: [
                 TextButton(
@@ -1396,7 +1703,10 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
                       await http.post(
                         Uri.parse('$baseUrl/api/settings'),
                         headers: {'Content-Type': 'application/json'},
-                        body: json.encode({'confidence_threshold': currentThreshold}),
+                        body: json.encode({
+                          'confidence_threshold': currentThreshold,
+                          'very_dirty_threshold': veryDirtyThreshold,
+                        }),
                       );
                     } catch (e) {}
                     if (context.mounted) Navigator.pop(context);

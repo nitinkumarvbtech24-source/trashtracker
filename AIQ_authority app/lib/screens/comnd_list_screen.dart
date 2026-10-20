@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../services/role_service.dart';
 import 'comnd_deflag_screen.dart';
 import '../constants.dart';
+import '../models/garbage_flag.dart';
 
 class ComndListScreen extends StatefulWidget {
   const ComndListScreen({super.key});
@@ -50,16 +51,17 @@ class _ComndListScreenState extends State<ComndListScreen> {
           final docs = snapshot.data?.docs ?? [];
           final filteredDocs = docs.where((doc) {
             final data = doc.data() as Map<String, dynamic>;
-            final mv = data['model_version'] ?? data['modelVersion'];
-            if (mv != null) {
-              final s = mv.toString().toLowerCase().trim();
-              if (s != MODEL_VERSION.toString() && s != 'v$MODEL_VERSION') return false;
-            } else {
-              return false;
-            }
-
-            final roadStatus = data['road_status'] ?? '';
-            if (roadStatus != 'Trash Detected') return false;
+            final roadStatus = (data['road_status'] ?? '').toString();
+            final displayClass = (data['display_class'] ?? '').toString();
+            final className = (data['class'] ?? '').toString();
+            final trashCount = (data['trash_count'] as num?)?.toInt();
+            final isTrash = GarbageFlag.isTrashDetectedSpot(
+              roadStatus: roadStatus,
+              displayClass: displayClass,
+              className: className,
+              trashCount: trashCount,
+            );
+            if (!isTrash) return false;
 
             final docZone = data['zone'] ?? '';
             final docWard = data['ward'] ?? '';
@@ -159,11 +161,14 @@ class _ComndListScreenState extends State<ComndListScreen> {
                               Expanded(
                                 child: ElevatedButton.icon(
                                   onPressed: () {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (context) => ComndDeflagScreen(documentId: doc.id),
-                                      ),
+                                    ComndDeflagScreen.showDeflagSelectionModal(
+                                      context: context,
+                                      documentId: doc.id,
+                                      initialLocation: '$zone - $ward',
+                                      lat: lat,
+                                      lng: lng,
+                                      ward: ward,
+                                      zone: zone,
                                     );
                                   },
                                   icon: const Icon(LucideIcons.camera, size: 18),

@@ -171,28 +171,33 @@ class _HealthScreenState extends State<HealthScreen> {
       for (int i = 0; i < list.length - 1; i++) {
         final start = LatLng(list[i].lat, list[i].lng);
         final end = LatLng(list[i + 1].lat, list[i + 1].lng);
+        final dist = const Distance().as(LengthUnit.Meter, start, end);
+        if (dist > 80.0) continue; // Never connect distant spots
         final status = list[i + 1].className;
         
         Color segmentColor = Colors.greenAccent;
         if (status == 'Pothole_Detected' || status == 'Pothole Detected') segmentColor = Colors.redAccent;
         else if (status == 'Bad_Road' || status == 'Bad Road') segmentColor = Colors.orangeAccent;
-        
 
         try {
-          final url = 'http://router.project-osrm.org/route/v1/driving/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=geojson';
-          final response = await http.get(Uri.parse(url));
+          final url = 'https://router.project-osrm.org/route/v1/driving/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=geojson';
+          final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 3));
           if (response.statusCode == 200) {
             final data = json.decode(response.body);
             if (data['routes'] != null && data['routes'].isNotEmpty) {
               final coords = data['routes'][0]['geometry']['coordinates'] as List;
               final snappedPoints = coords.map((c) => LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble())).toList();
-              newPolylines.add(Polyline(points: snappedPoints, color: segmentColor, strokeWidth: 6.0));
-              continue;
+              if (snappedPoints.length >= 2) {
+                newPolylines.add(Polyline(points: snappedPoints, color: segmentColor, strokeWidth: 6.0));
+                continue;
+              }
             }
           }
         } catch (_) {}
-        // Fallback to straight line
-        newPolylines.add(Polyline(points: [start, end], color: segmentColor, strokeWidth: 6.0));
+        // Fallback: only connect if close together (<= 25m)
+        if (dist <= 25.0) {
+          newPolylines.add(Polyline(points: [start, end], color: segmentColor, strokeWidth: 6.0));
+        }
       }
     }
 
@@ -209,10 +214,21 @@ class _HealthScreenState extends State<HealthScreen> {
       if (!mounted) return;
       setState(() {
         for (var newVehicle in vehicles) {
-          final liveData = _liveTrackingData[newVehicle.vehicleNumber] ?? _liveTrackingData[newVehicle.id];
+          Map<String, dynamic>? liveData = _liveTrackingData[newVehicle.vehicleNumber] ?? _liveTrackingData[newVehicle.id];
+          if (liveData == null) {
+            final cleanV = newVehicle.vehicleNumber.toLowerCase().replaceAll(RegExp(r'[\s\-_]'), '');
+            for (var entry in _liveTrackingData.entries) {
+              if (entry.key.toLowerCase().replaceAll(RegExp(r'[\s\-_]'), '') == cleanV) {
+                liveData = entry.value;
+                break;
+              }
+            }
+          }
           if (liveData != null) {
-            if (liveData['lat'] != null && liveData['lng'] != null) {
-              newVehicle.currentLocation = LatLng(liveData['lat'], liveData['lng']);
+            final lat = (liveData['lat'] as num?)?.toDouble();
+            final lng = (liveData['lng'] as num?)?.toDouble();
+            if (lat != null && lng != null) {
+              newVehicle.currentLocation = LatLng(lat, lng);
             }
             newVehicle.isActive = liveData['isActive'] ?? false;
             final Timestamp? ts = liveData['timestamp'] as Timestamp?;
@@ -260,7 +276,12 @@ class _HealthScreenState extends State<HealthScreen> {
         final Timestamp? timestamp = data['timestamp'] as Timestamp?;
 
         if (lat != null && lng != null && mounted) {
-          final index = _vehicles.indexWhere((v) => v.vehicleNumber == doc.id || v.id == doc.id);
+          final cleanDocId = doc.id.toLowerCase().replaceAll(RegExp(r'[\s\-_]'), '');
+          final index = _vehicles.indexWhere((v) {
+            if (v.vehicleNumber == doc.id || v.id == doc.id) return true;
+            final cleanV = v.vehicleNumber.toLowerCase().replaceAll(RegExp(r'[\s\-_]'), '');
+            return cleanV == cleanDocId || v.id.toLowerCase() == cleanDocId;
+          });
           if (index != -1) {
             _vehicles[index].currentLocation = LatLng(lat, lng);
             _vehicles[index].isActive = isActive;

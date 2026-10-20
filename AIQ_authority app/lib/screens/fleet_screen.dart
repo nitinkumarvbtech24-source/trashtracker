@@ -8,12 +8,17 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_map_cache/flutter_map_cache.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/vehicle.dart';
 import '../models/ward.dart';
 import '../models/zone.dart';
+import '../models/garbage_flag.dart';
 import '../services/map_cache_service.dart';
 import '../services/role_service.dart';
+import '../services/trash_spots_service.dart';
+import '../widgets/trash_pinpoint_marker.dart';
+import '../services/ward_zone_service.dart';
 
 enum MapMode { view, drawWard, drawZone }
 
@@ -62,6 +67,12 @@ class _FleetScreenState extends State<FleetScreen> {
     super.initState();
     _fetchDataFromFirestore();
     _startLiveTrackingListener();
+    TrashSpotsService.instance.init();
+    TrashSpotsService.instance.flagsNotifier.addListener(_onTrashSpotsUpdated);
+  }
+
+  void _onTrashSpotsUpdated() {
+    if (mounted) setState(() {});
   }
 
   String _formatDate(DateTime d) {
@@ -95,10 +106,21 @@ class _FleetScreenState extends State<FleetScreen> {
       final vehicles = snapshot.docs.map((doc) => Vehicle.fromJson(doc.id, doc.data())).toList();
       setState(() {
         for (var newVehicle in vehicles) {
-          final liveData = _liveTrackingData[newVehicle.vehicleNumber] ?? _liveTrackingData[newVehicle.id];
+          Map<String, dynamic>? liveData = _liveTrackingData[newVehicle.vehicleNumber] ?? _liveTrackingData[newVehicle.id];
+          if (liveData == null) {
+            final cleanV = newVehicle.vehicleNumber.toLowerCase().replaceAll(RegExp(r'[\s\-_]'), '');
+            for (var entry in _liveTrackingData.entries) {
+              if (entry.key.toLowerCase().replaceAll(RegExp(r'[\s\-_]'), '') == cleanV) {
+                liveData = entry.value;
+                break;
+              }
+            }
+          }
           if (liveData != null) {
-            if (liveData['lat'] != null && liveData['lng'] != null) {
-              newVehicle.currentLocation = LatLng(liveData['lat'], liveData['lng']);
+            final lat = (liveData['lat'] as num?)?.toDouble();
+            final lng = (liveData['lng'] as num?)?.toDouble();
+            if (lat != null && lng != null) {
+              newVehicle.currentLocation = LatLng(lat, lng);
             }
             newVehicle.isActive = liveData['isActive'] ?? false;
             final Timestamp? ts = liveData['timestamp'] as Timestamp?;
@@ -135,13 +157,18 @@ class _FleetScreenState extends State<FleetScreen> {
         final data = doc.data();
         _liveTrackingData[doc.id] = data;
         
-        final lat = data['lat'] as double?;
-        final lng = data['lng'] as double?;
+        final lat = (data['lat'] as num?)?.toDouble();
+        final lng = (data['lng'] as num?)?.toDouble();
         final isActive = data['isActive'] as bool? ?? false;
         final Timestamp? timestamp = data['timestamp'] as Timestamp?;
 
         if (lat != null && lng != null && mounted) {
-          final index = _vehicles.indexWhere((v) => v.vehicleNumber == doc.id || v.id == doc.id);
+          final cleanDocId = doc.id.toLowerCase().replaceAll(RegExp(r'[\s\-_]'), '');
+          final index = _vehicles.indexWhere((v) {
+            if (v.vehicleNumber == doc.id || v.id == doc.id) return true;
+            final cleanV = v.vehicleNumber.toLowerCase().replaceAll(RegExp(r'[\s\-_]'), '');
+            return cleanV == cleanDocId || v.id.toLowerCase() == cleanDocId;
+          });
           if (index != -1) {
             _vehicles[index].currentLocation = LatLng(lat, lng);
             _vehicles[index].isActive = isActive;
@@ -160,6 +187,7 @@ class _FleetScreenState extends State<FleetScreen> {
 
   @override
   void dispose() {
+    TrashSpotsService.instance.flagsNotifier.removeListener(_onTrashSpotsUpdated);
     _liveTrackingSub?.cancel();
     _vehiclesSub?.cancel();
     _wardsSub?.cancel();
@@ -961,86 +989,23 @@ class _FleetScreenState extends State<FleetScreen> {
                         }).toList(),
                       ),
                       MarkerLayer(markers: _buildCustomMarkers()),
+                      MarkerLayer(markers: _buildTrashMarkers()),
 
-                      PolygonLayer(
-                        polygons: [
-                          ..._wards.where((w) => w.boundary.isNotEmpty).map((w) => Polygon(
-                            points: w.boundary,
-                            color: Colors.blue.withValues(alpha: 0.1),
-                            borderColor: Colors.blue.withValues(alpha: 0.8),
-                            borderStrokeWidth: 2,
-                          )),
-                          ..._zones.where((z) => z.boundary.isNotEmpty).map((z) => Polygon(
-                            points: z.boundary,
-                            color: Colors.purple.withValues(alpha: 0.1),
-                            borderColor: Colors.purple.withValues(alpha: 0.8),
-                            borderStrokeWidth: 2,
-                          )),
-                          if (_drawingPoints.isNotEmpty)
+                      ...WardZoneService.instance.buildLayers(
+                        selectedZone: _selectedZone?.name ?? (_selectedZoneFilter != 'All Zones' ? _selectedZoneFilter : null),
+                        selectedWard: _selectedWard?.name ?? (_selectedWardFilter != 'All Wards' ? _selectedWardFilter : null),
+                      ),
+                      if (_drawingPoints.isNotEmpty)
+                        PolygonLayer(
+                          polygons: [
                             Polygon(
                               points: _drawingPoints,
-                              color: (_currentMode == MapMode.drawWard ? Colors.blue : Colors.purple).withValues(alpha: 0.3),
-                              borderColor: (_currentMode == MapMode.drawWard ? Colors.blue : Colors.purple),
+                              color: (_currentMode == MapMode.drawWard ? Colors.blue : Colors.green).withValues(alpha: 0.3),
+                              borderColor: (_currentMode == MapMode.drawWard ? Colors.blue : Colors.green),
                               borderStrokeWidth: 2,
-                            )
-                        ],
-                      ),
-                      MarkerLayer(
-                        markers: [
-                          ..._wards.where((w) => w.boundary.isNotEmpty).map((w) {
-                            double cLat = 0, cLng = 0;
-                            for (var p in w.boundary) { cLat += p.latitude; cLng += p.longitude; }
-                            LatLng centroid = LatLng(cLat / w.boundary.length, cLng / w.boundary.length);
-                            return Marker(
-                              point: centroid,
-                              width: 120, height: 30,
-                              child: Center(
-                                child: Text(
-                                  w.name,
-                                  style: const TextStyle(
-                                    color: Colors.blue, 
-                                    fontWeight: FontWeight.bold, 
-                                    fontSize: 14,
-                                    shadows: [
-                                      Shadow(offset: Offset(-1, -1), color: Colors.white),
-                                      Shadow(offset: Offset(1, -1), color: Colors.white),
-                                      Shadow(offset: Offset(1, 1), color: Colors.white),
-                                      Shadow(offset: Offset(-1, 1), color: Colors.white),
-                                    ],
-                                  ),
-                                  textAlign: TextAlign.center,
-                                ),
-                              ),
-                            );
-                          }),
-                          ..._zones.where((z) => z.boundary.isNotEmpty).map((z) {
-                            double cLat = 0, cLng = 0;
-                            for (var p in z.boundary) { cLat += p.latitude; cLng += p.longitude; }
-                            LatLng centroid = LatLng(cLat / z.boundary.length, cLng / z.boundary.length);
-                            return Marker(
-                              point: centroid,
-                              width: 120, height: 30,
-                              child: Center(
-                                child: Text(
-                                  z.name,
-                                  style: const TextStyle(
-                                    color: Colors.purpleAccent, 
-                                    fontWeight: FontWeight.w900, 
-                                    fontSize: 16,
-                                    shadows: [
-                                      Shadow(offset: Offset(-1, -1), color: Colors.white),
-                                      Shadow(offset: Offset(1, -1), color: Colors.white),
-                                      Shadow(offset: Offset(1, 1), color: Colors.white),
-                                      Shadow(offset: Offset(-1, 1), color: Colors.white),
-                                    ],
-                                  ),
-                                  textAlign: TextAlign.center,
-                                ),
-                              ),
-                            );
-                          }),
-                        ],
-                      ),
+                            ),
+                          ],
+                        ),
                       if (_drawingPoints.isNotEmpty)
                         MarkerLayer(
                           markers: _drawingPoints.map((p) => Marker(
@@ -1125,8 +1090,7 @@ class _FleetScreenState extends State<FleetScreen> {
     List<Marker> markers = [];
     for (var v in _filteredVehicles) {
       if (v.currentLocation == null) continue;
-      if (!v.isRunning) continue;
-      Color statusColor = const Color(0xFFEF4444);
+      Color statusColor = Color(v.stateColorValue);
       if (v.isActive) {
         if (v.lastHeartbeat != null && DateTime.now().difference(v.lastHeartbeat!).inMinutes > 5) {
           statusColor = const Color(0xFFF59E0B);
@@ -1158,6 +1122,87 @@ class _FleetScreenState extends State<FleetScreen> {
       ));
     }
     return markers;
+  }
+
+  List<Marker> _buildTrashMarkers() {
+    final flags = TrashSpotsService.instance.activeFlags;
+    final clusters = TrashSpotsService.instance.clusterFlags(flags);
+
+    return clusters.map((cluster) {
+      final flag = cluster.first;
+      final isVeryDirty = cluster.any((f) => f.className == 'Very_Dirty' || f.displayClass == 'Very Dirty');
+      return Marker(
+        point: LatLng(flag.lat, flag.lng),
+        width: 38,
+        height: 46,
+        alignment: Alignment.topCenter,
+        child: TrashPinpointWidget(
+          count: cluster.length,
+          isVeryDirty: isVeryDirty,
+          onTap: () => _showTrashPopup(flag),
+        ),
+      );
+    }).toList();
+  }
+
+  void _showTrashPopup(GarbageFlag flag) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+        title: Text(
+          '${flag.className.replaceAll('_', ' ')} - ${flag.displayClass}',
+          style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+        ),
+        content: SizedBox(
+          width: 450,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.network(
+                  flag.imageUrl,
+                  headers: const {"ngrok-skip-browser-warning": "true"},
+                  height: 220,
+                  width: double.infinity,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => Container(
+                    height: 200,
+                    color: Colors.grey.shade200,
+                    child: const Center(child: Icon(Icons.broken_image, size: 40, color: Colors.grey)),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text("Confidence: ${(flag.confidence * 100).toStringAsFixed(1)}%", style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 4),
+              Text("Vehicle: ${flag.vehicleNumber}", style: const TextStyle(color: Colors.black87)),
+              const SizedBox(height: 4),
+              Text("Location: ${flag.zone} - ${flag.ward}", style: const TextStyle(color: Colors.black54, fontSize: 12)),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close', style: TextStyle(color: Colors.black54)),
+          ),
+          ElevatedButton.icon(
+            icon: const Icon(Icons.directions_outlined, size: 18),
+            label: const Text('Directions'),
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0F5132), foregroundColor: Colors.white),
+            onPressed: () async {
+              final url = Uri.parse('https://www.google.com/maps/dir/?api=1&destination=${flag.lat},${flag.lng}');
+              if (await canLaunchUrl(url)) {
+                await launchUrl(url);
+              }
+            },
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildDevicesView() {

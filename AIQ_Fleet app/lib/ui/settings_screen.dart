@@ -319,9 +319,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text('Model Version', style: GoogleFonts.inter(fontSize: 14, color: Colors.white)),
-                        Text('V7 (Port 5001)', style: GoogleFonts.inter(fontSize: 14, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                        Text('V7 + MobileNetV3 (Port 5001)', style: GoogleFonts.inter(fontSize: 14, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
                       ],
                     ),
+                    const SizedBox(height: 4),
+                    Text('YOLOv7 (Object Detection) + MobileNetV3 (Cleanliness Classification)', style: GoogleFonts.inter(fontSize: 11, color: Colors.white38)),
                     const SizedBox(height: 16),
                     const Divider(color: Colors.white10),
                     const SizedBox(height: 16),

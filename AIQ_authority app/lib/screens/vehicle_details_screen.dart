@@ -14,12 +14,12 @@ import '../services/map_cache_service.dart';
 import '../mock_data.dart';
 import '../models/vehicle.dart';
 import '../models/ward.dart';
-import '../constants.dart';
 import '../widgets/ngrok_image.dart';
 import '../models/garbage_flag.dart';
 import 'database_screen.dart';
 import '../widgets/trash_pinpoint_marker.dart';
 import '../services/ward_zone_service.dart';
+import '../services/trash_spots_service.dart';
 
 class VehicleDetailsScreen extends StatefulWidget {
   final Vehicle vehicle;
@@ -40,10 +40,13 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
   bool _isFullscreenMap = false;
   StreamSubscription<DocumentSnapshot>? _dailyStatsSub;
   StreamSubscription<DocumentSnapshot>? _vehicleSub;
+  StreamSubscription<QuerySnapshot>? _liveTrackingSub;
   Vehicle? _liveVehicle;
 
   double _distanceCoveredKm = 0.0;
   List<LatLng> _drivenRoute = [];
+  List<Polyline> _vehicleTrail = [];
+  List<GarbageFlag> _allVehicleFlags = [];
   
   List<GarbageFlag> _garbageFlags = [];
   StreamSubscription<QuerySnapshot>? _trashSub;
@@ -72,6 +75,34 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
           setState(() {
             _liveVehicle = Vehicle.fromJson(doc.id, doc.data() as Map<String, dynamic>);
           });
+        }
+      }
+    });
+
+    // Real-time live_tracking listener for high-accuracy GPS
+    _liveTrackingSub = FirebaseFirestore.instance
+        .collection('live_tracking')
+        .snapshots()
+        .listen((snapshot) {
+      if (!mounted) return;
+      final targetNormalized = widget.vehicle.vehicleNumber.replaceAll(RegExp(r'[\s\-_]'), '').toLowerCase();
+      for (var doc in snapshot.docs) {
+        final docNormalized = doc.id.replaceAll(RegExp(r'[\s\-_]'), '').toLowerCase();
+        if (docNormalized == targetNormalized) {
+          final data = doc.data();
+          final lat = (data['lat'] as num?)?.toDouble();
+          final lng = (data['lng'] as num?)?.toDouble();
+          if (lat != null && lng != null) {
+            setState(() {
+              if (_liveVehicle != null) {
+                _liveVehicle!.currentLocation = LatLng(lat, lng);
+                _liveVehicle!.isActive = data['isActive'] as bool? ?? false;
+                final ts = data['timestamp'] as Timestamp?;
+                if (ts != null) _liveVehicle!.lastHeartbeat = ts.toDate();
+              }
+            });
+          }
+          break;
         }
       }
     });
@@ -106,32 +137,65 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
               final List<dynamic> rawRoute = data['route'];
               _drivenRoute = rawRoute.map((e) => LatLng((e['lat'] as num).toDouble(), (e['lng'] as num).toDouble())).toList();
             }
+            if (data['trail'] != null) {
+              final List<dynamic> rawTrail = data['trail'];
+              _vehicleTrail = rawTrail.map((e) {
+                final start = LatLng(
+                  ((e['startLat'] ?? e['start_lat'] ?? 0.0) as num).toDouble(),
+                  ((e['startLng'] ?? e['start_lng'] ?? 0.0) as num).toDouble(),
+                );
+                final end = LatLng(
+                  ((e['endLat'] ?? e['end_lat'] ?? 0.0) as num).toDouble(),
+                  ((e['endLng'] ?? e['end_lng'] ?? 0.0) as num).toDouble(),
+                );
+                final color = Color((e['color'] as num?)?.toInt() ?? 0xFF00E676);
+                return Polyline(
+                  points: [start, end],
+                  color: color,
+                  strokeWidth: 5.0,
+                  borderStrokeWidth: 1.0,
+                  borderColor: Colors.black12,
+                );
+              }).toList();
+            }
           });
         }
       }
     });
   }
 
+  void _onTrashSpotsUpdate() {
+    if (mounted) _updateVehicleFlags();
+  }
+
+  void _updateVehicleFlags() {
+    final vNum = widget.vehicle.vehicleNumber.trim().toLowerCase();
+    final flags = TrashSpotsService.instance.getFlagsForVehicle(vNum);
+    final allFlags = TrashSpotsService.instance.getAllFlagsForVehicle(vNum);
+    setState(() {
+      _garbageFlags = flags;
+      _allVehicleFlags = allFlags;
+    });
+  }
+
   Future<void> _fetchGarbageFlags() async {
+    TrashSpotsService.instance.flagsNotifier.addListener(_onTrashSpotsUpdate);
+    _updateVehicleFlags();
+
     _trashSub?.cancel();
-    _trashSub = FirebaseFirestore.instance.collection('trash_spots')
-        .where('vehicle_number', isEqualTo: widget.vehicle.vehicleNumber)
-        .snapshots().listen((snapshot) {
+    _trashSub = FirebaseFirestore.instance.collection('trash_spots').snapshots().listen((snapshot) {
       if (!mounted) return;
-      setState(() {
-        _garbageFlags = snapshot.docs
-            .map((doc) => GarbageFlag.fromJson(doc.data(), doc.id))
-            .where((f) => f.status != 'Resolved' && f.status != 'Deflagged' && f.matchesModelVersion(MODEL_VERSION) && (f.className == 'Trash_Detected' || f.displayClass == 'Trash Detected'))
-            .toList();
-      });
+      _updateVehicleFlags();
     });
   }
 
   @override
   void dispose() {
     WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
+    TrashSpotsService.instance.flagsNotifier.removeListener(_onTrashSpotsUpdate);
     _dailyStatsSub?.cancel();
     _vehicleSub?.cancel();
+    _liveTrackingSub?.cancel();
     _trashSub?.cancel();
     super.dispose();
   }
@@ -686,9 +750,9 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
   }
 
   Widget _buildVehiclePieChart() {
-    double cleanVal = _garbageFlags.where((f) => f.className == 'Clean').length.toDouble();
-    double slightVal = _garbageFlags.where((f) => f.className == 'Slightly_Dirty').length.toDouble();
-    double dirtyVal = _garbageFlags.where((f) => f.className == 'Very_Dirty').length.toDouble();
+    double cleanVal = _garbageFlags.where((f) => f.className == 'Clean' || f.displayClass == 'Clean' || f.displayClass == 'Clean Road').length.toDouble();
+    double slightVal = _garbageFlags.where((f) => f.className == 'Slightly_Dirty' || f.className == 'Trash_Detected' || f.displayClass == 'Trash Detected').length.toDouble();
+    double dirtyVal = _garbageFlags.where((f) => f.className == 'Very_Dirty' || f.displayClass == 'Very Dirty' || f.displayClass == 'Very Dirty Road').length.toDouble();
     double total = _garbageFlags.isEmpty ? 1 : _garbageFlags.length.toDouble();
     
     if (cleanVal == 0 && slightVal == 0 && dirtyVal == 0) {
@@ -915,19 +979,23 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
 
   Widget _buildMap() {
     Map<String, List<GarbageFlag>> sessions = {};
-    for (var flag in _garbageFlags) {
-      if (flag.sessionId != null) {
-        sessions.putIfAbsent(flag.sessionId!, () => []).add(flag);
-      }
+    final flagsSource = _allVehicleFlags.isNotEmpty ? _allVehicleFlags : _garbageFlags;
+    for (var flag in flagsSource) {
+      final key = flag.sessionId ?? (flag.vehicleNumber.isNotEmpty ? flag.vehicleNumber : 'default');
+      sessions.putIfAbsent(key, () => []).add(flag);
     }
 
     List<Polyline> routePolylines = [];
     
-    if (_drivenRoute.isNotEmpty) {
+    if (_vehicleTrail.isNotEmpty) {
+      routePolylines.addAll(_vehicleTrail);
+    } else if (_drivenRoute.isNotEmpty) {
       routePolylines.add(Polyline(
         points: _drivenRoute,
-        strokeWidth: 4,
-        color: Colors.blueAccent.withValues(alpha: 0.8),
+        strokeWidth: 5,
+        color: const Color(0xFF00E676), // Vibrant Green for Clean Travelled Road
+        borderStrokeWidth: 1.0,
+        borderColor: Colors.black12,
       ));
     }
 
@@ -949,16 +1017,39 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
       for (int i = 0; i < list.length - 1; i++) {
         final start = LatLng(list[i].lat, list[i].lng);
         final end = LatLng(list[i + 1].lat, list[i + 1].lng);
-        final status = list[i + 1].className;
+        final dist = const Distance().as(LengthUnit.Meter, start, end);
+        if (dist > 60.0) continue; // Never connect distant trash flags
+        final nextFlag = list[i + 1];
+        final status = (nextFlag.displayClass.isNotEmpty ? nextFlag.displayClass : nextFlag.className).toLowerCase();
+        final isNoTrash = status.contains('no trash') || status.contains('no_trash') || status.contains('clean');
         
-        Color segmentColor = Colors.green;
-        if (status == 'Very_Dirty') segmentColor = Colors.red;
-        else if (status == 'Slightly_Dirty') segmentColor = Colors.orange;
+        final isVeryDirty = nextFlag.className == 'Very_Dirty' || 
+                            nextFlag.displayClass == 'Very Dirty' || 
+                            nextFlag.displayClass == 'Very Dirty Road' ||
+                            nextFlag.className.toLowerCase().contains('very_dirty');
+        
+        final isTrash = !isNoTrash && (nextFlag.isTrashDetected ||
+                        nextFlag.className == 'Slightly_Dirty' ||
+                        nextFlag.displayClass == 'Trash Detected' ||
+                        nextFlag.displayClass == 'Slightly Dirty' ||
+                        nextFlag.displayClass == 'Slightly Dirty Road' ||
+                        nextFlag.className == 'trash_detected' ||
+                        nextFlag.trashCount > 0);
+        
+        // Accurate 3-tier road cleanliness color mapping
+        Color segmentColor = const Color(0xFF00E676); // Clean: Vibrant Green (No Trash Detected)
+        if (isVeryDirty) {
+          segmentColor = const Color(0xFFFF1744); // Very Dirty: Vibrant Red
+        } else if (isTrash) {
+          segmentColor = const Color(0xFFFF9100); // Trash Detected: Vibrant Amber/Orange
+        }
         
         routePolylines.add(Polyline(
           points: [start, end],
           color: segmentColor,
-          strokeWidth: 4.0,
+          strokeWidth: 5.0,
+          borderStrokeWidth: 1.0,
+          borderColor: Colors.black12,
         ));
       }
     });
@@ -993,8 +1084,8 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
               ),
             if (_showFlags && _garbageFlags.isNotEmpty)
               MarkerLayer(
-                markers: _garbageFlags.where((f) => f.className != 'Clean' && f.pointType != 'intermediate').map((flag) {
-                  final isVeryDirty = flag.className == 'Very_Dirty';
+                markers: _garbageFlags.where((f) => f.isTrashDetected && f.pointType != 'intermediate').map((flag) {
+                  final isVeryDirty = flag.className == 'Very_Dirty' || flag.displayClass == 'Very Dirty' || flag.displayClass == 'Very Dirty Road';
                   return Marker(
                     point: LatLng(flag.lat, flag.lng),
                     width: 38,

@@ -18,7 +18,15 @@ class _DatabaseScreenState extends State<DatabaseScreen> with SingleTickerProvid
   late AnimationController _pulseController;
   Timer? _timer;
   List<dynamic> _snapshots = [];
-  Map<String, dynamic> _stats = {"total": 0, "No Trash Detected": 0, "Trash Detected": 0, "Not a Road": 0};
+  Map<String, dynamic> _stats = {
+    "total": 0,
+    "passed_to_yolo": 0,
+    "passed_to_mobilenet": 0,
+    "bypassed_clean": 0,
+    "No Trash / Clean Roads": 0,
+    "Trash Detected": 0,
+    "Very Dirty Road": 0,
+  };
   String _selectedFolder = 'All';
   int _selectedNavIndex = 0; // 0: Analysed Images, 1: Training Dataset (Raw)
 
@@ -45,12 +53,34 @@ class _DatabaseScreenState extends State<DatabaseScreen> with SingleTickerProvid
         if (res1.statusCode == 200) {
           final data = json.decode(res1.body);
           List<dynamic> rawSnaps = data['snapshots'] ?? [];
-          for (var snap in rawSnaps) {
-            if (snap['display_class'] == 'Clean Road') {
-              snap['display_class'] = 'No Trash Detected';
-            } else if (snap['display_class'] == 'Slightly Dirty Road' || snap['display_class'] == 'Very Dirty Road') {
+          for (var item in rawSnaps) {
+            Map<String, dynamic> snap = Map<String, dynamic>.from(item);
+            final status = (snap['road_status'] ?? '').toString();
+            final display = (snap['display_class'] ?? '').toString();
+            final tag = (snap['training_tag'] ?? '').toString();
+            final decision = (snap['decision'] ?? '').toString().toUpperCase();
+
+            final int trashCount = (snap['trash_count'] ?? 0);
+            final bool hasTrashBoxes = trashCount > 0 || snap['trash_detected'] == true;
+
+            // 3-way classification: No Trash / Clean Roads, Trash Detected, Very Dirty Road
+            // STRICT RULE: If trash spots got identified or got bounded (trashCount > 0),
+            // it is EITHER 'Very Dirty Road' OR 'Trash Detected'. NEVER Clean Road!
+            if (status == 'Very Dirty Road' ||
+                display == 'Very Dirty Road' ||
+                tag == 'Very Dirty Road' ||
+                decision.contains('VERY DIRTY')) {
+              snap['display_class'] = 'Very Dirty Road';
+            } else if (hasTrashBoxes ||
+                       status == 'Trash Detected' ||
+                       display == 'Trash Detected' ||
+                       tag == 'Trash Detected' ||
+                       decision.contains('TRASH DETECTED')) {
               snap['display_class'] = 'Trash Detected';
+            } else {
+              snap['display_class'] = 'No Trash / Clean Roads';
             }
+
             if (snap['training_tag'] == null) {
               snap['training_tag'] = snap['display_class'];
             }
@@ -74,11 +104,32 @@ class _DatabaseScreenState extends State<DatabaseScreen> with SingleTickerProvid
             allSnaps = allSnaps.where((s) => s['vehicle_number'] == widget.vehicleFilter).toList();
           }
           _snapshots = allSnaps;
+          final totalSnaps = _snapshots.length;
+          final passedToMobilenet = _snapshots.where((s) {
+            final m = s['mobilenet_result'];
+            if (m is Map && m['invoked'] == true) return true;
+            final d = (s['decision'] ?? '').toString().toUpperCase();
+            final status = (s['road_status'] ?? '').toString();
+            final disp = (s['display_class'] ?? '').toString();
+            final count = (s['trash_count'] ?? 0);
+            return status == 'Very Dirty Road' || 
+                   disp == 'Very Dirty Road' || 
+                   status == 'Trash Detected' || 
+                   disp == 'Trash Detected' || 
+                   d.contains('VERY DIRTY') || 
+                   d.contains('TRASH DETECTED') || 
+                   count > 0;
+          }).length;
+          final bypassedClean = totalSnaps - passedToMobilenet;
+
           _stats = {
-            "total": _snapshots.length,
-            "No Trash Detected": _snapshots.where((s) => s['display_class'] == 'No Trash Detected').length,
+            "total": totalSnaps,
+            "passed_to_yolo": totalSnaps,
+            "passed_to_mobilenet": passedToMobilenet,
+            "bypassed_clean": bypassedClean,
+            "No Trash / Clean Roads": _snapshots.where((s) => s['display_class'] == 'No Trash / Clean Roads').length,
             "Trash Detected": _snapshots.where((s) => s['display_class'] == 'Trash Detected').length,
-            "Not a Road": _snapshots.where((s) => s['display_class'] == 'Not a Road').length,
+            "Very Dirty Road": _snapshots.where((s) => s['display_class'] == 'Very Dirty Road').length,
           };
         });
       }
@@ -95,9 +146,15 @@ class _DatabaseScreenState extends State<DatabaseScreen> with SingleTickerProvid
   }
 
   Color _getClassColor(String className) {
-    if (className == 'No Trash Detected') return const Color(0xFF00E676);
-    if (className == 'Trash Detected') return const Color(0xFFFF1744);
-    if (className == 'Not a Road') return const Color(0xFF8A8F9D);
+    if (className == 'No Trash / Clean Roads' || className == 'No Trash Detected' || className == 'Clean Road') {
+      return const Color(0xFF00E676); // Green
+    }
+    if (className == 'Very Dirty Road') {
+      return const Color(0xFFFF1744); // Red
+    }
+    if (className == 'Trash Detected') {
+      return const Color(0xFFFF9100); // Amber / Orange
+    }
     return const Color(0xFF8A8F9D);
   }
 
@@ -160,6 +217,83 @@ class _DatabaseScreenState extends State<DatabaseScreen> with SingleTickerProvid
 
     if (isMobile) return cardContent;
     return Expanded(child: cardContent);
+  }
+
+  Widget _buildPipelineCountBox({
+    required String label,
+    required int count,
+    required String subtext,
+    required Color color,
+    required IconData icon,
+    bool isMobile = false,
+  }) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: isMobile ? 10 : 14, vertical: isMobile ? 8 : 10),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.35), width: 1.5),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: EdgeInsets.all(isMobile ? 6 : 8),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.18),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, color: color, size: isMobile ? 16 : 20),
+          ),
+          SizedBox(width: isMobile ? 8 : 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  label.toUpperCase(),
+                  style: TextStyle(
+                    color: color,
+                    fontSize: isMobile ? 9 : 10,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.4,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                SizedBox(height: isMobile ? 2 : 3),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.baseline,
+                  textBaseline: TextBaseline.alphabetic,
+                  children: [
+                    Text(
+                      count.toString(),
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: isMobile ? 18 : 22,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        subtext,
+                        style: TextStyle(
+                          color: const Color(0xFF8A8F9D),
+                          fontSize: isMobile ? 9 : 11,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildFolderTab(String title, IconData icon, Color color) {
@@ -424,15 +558,107 @@ class _DatabaseScreenState extends State<DatabaseScreen> with SingleTickerProvid
               ),
             ),
 
+            // AI Model Processing Pipeline Card (Counts)
+            Container(
+              margin: const EdgeInsets.only(bottom: 14),
+              padding: EdgeInsets.symmetric(horizontal: isMobile ? 12 : 16, vertical: isMobile ? 10 : 12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF161822),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: const Color(0xFF232738), width: 1.5),
+                boxShadow: const [
+                  BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 3)),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF00F2FE).withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Icon(LucideIcons.gitBranch, color: Color(0xFF00F2FE), size: 14),
+                      ),
+                      const SizedBox(width: 8),
+                      const Text(
+                        "AI MODEL PROCESSING FLOW",
+                        style: TextStyle(
+                          color: Color(0xFF8A8F9D),
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.6,
+                        ),
+                      ),
+                      const Spacer(),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF00E676).withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFF00E676).withOpacity(0.4)),
+                        ),
+                        child: Text(
+                          "${_stats['bypassed_clean'] ?? 0} Clean Road Bypassed (Saved)",
+                          style: const TextStyle(color: Color(0xFF00E676), fontSize: 10, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildPipelineCountBox(
+                          label: "Passed to YOLO Model",
+                          count: _stats['passed_to_yolo'] ?? 0,
+                          subtext: "100% of Captures",
+                          color: const Color(0xFF00F2FE),
+                          icon: LucideIcons.scan,
+                          isMobile: isMobile,
+                        ),
+                      ),
+                      Padding(
+                        padding: EdgeInsets.symmetric(horizontal: isMobile ? 4 : 10),
+                        child: Column(
+                          children: [
+                            const Icon(LucideIcons.arrowRight, color: Color(0xFF8A8F9D), size: 16),
+                            if (!isMobile)
+                              const Text(
+                                "Trash Flagged",
+                                style: TextStyle(color: Color(0xFF8A8F9D), fontSize: 9, fontWeight: FontWeight.w600),
+                              ),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        child: _buildPipelineCountBox(
+                          label: "Passed to MobileNetV3",
+                          count: _stats['passed_to_mobilenet'] ?? 0,
+                          subtext: "From YOLO",
+                          color: const Color(0xFFA855F7),
+                          icon: LucideIcons.cpu,
+                          isMobile: isMobile,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+
             // Folder Tabs
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
                 children: [
-                  _buildFolderTab('All', Icons.folder_copy_rounded, Colors.blue),
-                  _buildFolderTab('No Trash Detected', Icons.folder_rounded, const Color(0xFF00E676)),
-                  _buildFolderTab('Trash Detected', Icons.folder_special_rounded, const Color(0xFFFF1744)),
-                  _buildFolderTab('Not a Road', Icons.folder_off_rounded, const Color(0xFF8A8F9D)),
+                  _buildFolderTab('All', Icons.folder_copy_rounded, const Color(0xFF00F2FE)),
+                  _buildFolderTab('No Trash / Clean Roads', Icons.folder_rounded, const Color(0xFF00E676)),
+                  _buildFolderTab('Trash Detected', Icons.folder_special_rounded, const Color(0xFFFF9100)),
+                  _buildFolderTab('Very Dirty Road', Icons.warning_amber_rounded, const Color(0xFFFF1744)),
                 ],
               ),
             ),
@@ -446,15 +672,15 @@ class _DatabaseScreenState extends State<DatabaseScreen> with SingleTickerProvid
                     children: [
                       Expanded(child: _buildStatCard(isAnalysedView ? "Total Captures" : "Total Raw Images", _stats['total'] ?? 0, isAnalysedView ? null : const Color(0xFFA855F7), true)),
                       const SizedBox(width: 10),
-                      Expanded(child: _buildStatCard(isAnalysedView ? "No Trash Detected" : "Tagged: Clean", _stats['No Trash Detected'] ?? 0, const Color(0xFF00E676), true)),
+                      Expanded(child: _buildStatCard(isAnalysedView ? "No Trash / Clean" : "Tagged: Clean", _stats['No Trash / Clean Roads'] ?? 0, const Color(0xFF00E676), true)),
                     ],
                   ),
                   const SizedBox(height: 10),
                   Row(
                     children: [
-                      Expanded(child: _buildStatCard(isAnalysedView ? "Trash Detected" : "Tagged: Trash", _stats['Trash Detected'] ?? 0, const Color(0xFFFF1744), true)),
+                      Expanded(child: _buildStatCard(isAnalysedView ? "Trash Detected" : "Tagged: Trash", _stats['Trash Detected'] ?? 0, const Color(0xFFFF9100), true)),
                       const SizedBox(width: 10),
-                      Expanded(child: _buildStatCard(isAnalysedView ? "Not a Road" : "Zero Annotations", isAnalysedView ? (_stats['Not a Road'] ?? 0) : (_stats['total'] ?? 0), isAnalysedView ? const Color(0xFF8A8F9D) : const Color(0xFF00F2FE), true)),
+                      Expanded(child: _buildStatCard(isAnalysedView ? "Very Dirty Road" : "Tagged: Very Dirty", _stats['Very Dirty Road'] ?? 0, const Color(0xFFFF1744), true)),
                     ],
                   ),
                 ],
@@ -463,9 +689,9 @@ class _DatabaseScreenState extends State<DatabaseScreen> with SingleTickerProvid
               Row(
                 children: [
                   _buildStatCard(isAnalysedView ? "Total Captures" : "Total Raw Images", _stats['total'] ?? 0, isAnalysedView ? null : const Color(0xFFA855F7)),
-                  _buildStatCard(isAnalysedView ? "No Trash Detected" : "Tagged: Clean", _stats['No Trash Detected'] ?? 0, const Color(0xFF00E676)),
-                  _buildStatCard(isAnalysedView ? "Trash Detected" : "Tagged: Trash", _stats['Trash Detected'] ?? 0, const Color(0xFFFF1744)),
-                  _buildStatCard(isAnalysedView ? "Not a Road" : "Zero Annotations", isAnalysedView ? (_stats['Not a Road'] ?? 0) : (_stats['total'] ?? 0), isAnalysedView ? const Color(0xFF8A8F9D) : const Color(0xFF00F2FE)),
+                  _buildStatCard(isAnalysedView ? "No Trash / Clean" : "Tagged: Clean", _stats['No Trash / Clean Roads'] ?? 0, const Color(0xFF00E676)),
+                  _buildStatCard(isAnalysedView ? "Trash Detected" : "Tagged: Trash", _stats['Trash Detected'] ?? 0, const Color(0xFFFF9100)),
+                  _buildStatCard(isAnalysedView ? "Very Dirty Road" : "Tagged: Very Dirty", _stats['Very Dirty Road'] ?? 0, const Color(0xFFFF1744)),
                 ],
               ),
             SizedBox(height: isMobile ? 16 : 24),
@@ -525,8 +751,8 @@ class _DatabaseScreenState extends State<DatabaseScreen> with SingleTickerProvid
                             color: const Color(0xFF161822),
                             border: Border.all(
                               color: isAnalysedView 
-                                  ? const Color(0xFF232738) 
-                                  : (className == 'Trash Detected' ? const Color(0xFFFF1744).withOpacity(0.6) : const Color(0xFF00E676).withOpacity(0.6)),
+                                  ? color.withOpacity(0.3) 
+                                  : color.withOpacity(0.6),
                               width: isAnalysedView ? 1 : 1.5,
                             ),
                             borderRadius: BorderRadius.circular(16),
@@ -613,14 +839,30 @@ class _DatabaseScreenState extends State<DatabaseScreen> with SingleTickerProvid
                                               borderRadius: BorderRadius.circular(20),
                                             ),
                                             child: Text(
-                                              className.toUpperCase(),
+                                              className == 'No Trash / Clean Roads' ? 'CLEAN ROAD' : className.toUpperCase(),
                                               style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.bold),
                                             ),
                                           ),
                                           const SizedBox(height: 8),
+                                          Row(
+                                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                            children: [
+                                              Text(
+                                                className == 'Very Dirty Road'
+                                                    ? "Severe Dirty"
+                                                    : (className == 'Trash Detected' ? "Litter Detected" : "Clean Surface"),
+                                                style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                                              ),
+                                              Text(
+                                                "${snap['trash_count'] ?? (className == 'No Trash / Clean Roads' ? 0 : 1)} Item(s)",
+                                                style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.bold),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 2),
                                           Text(
-                                            "Confidence: ${confidence.toStringAsFixed(1)}%",
-                                            style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                                            "Cleanliness Score: ${(snap['cleanliness_score'] ?? confidence).toStringAsFixed(1)}%",
+                                            style: TextStyle(color: color.withOpacity(0.9), fontSize: 11, fontWeight: FontWeight.w600),
                                           ),
                                           const SizedBox(height: 3),
                                           Text(
@@ -649,13 +891,17 @@ class _DatabaseScreenState extends State<DatabaseScreen> with SingleTickerProvid
                                               mainAxisSize: MainAxisSize.min,
                                               children: [
                                                 Icon(
-                                                  className == 'Trash Detected' ? LucideIcons.alertTriangle : LucideIcons.checkCircle2,
+                                                  className == 'Very Dirty Road'
+                                                      ? LucideIcons.alertOctagon
+                                                      : (className == 'Trash Detected'
+                                                          ? LucideIcons.alertTriangle
+                                                          : LucideIcons.checkCircle2),
                                                   color: color,
                                                   size: 14,
                                                 ),
                                                 const SizedBox(width: 6),
                                                 Text(
-                                                  "TAG: ${className.toUpperCase()}",
+                                                  "TAG: ${className == 'No Trash / Clean Roads' ? 'CLEAN ROAD' : className.toUpperCase()}",
                                                   style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w800),
                                                 ),
                                               ],
@@ -667,7 +913,9 @@ class _DatabaseScreenState extends State<DatabaseScreen> with SingleTickerProvid
                                               const Icon(LucideIcons.tag, size: 12, color: Color(0xFFA855F7)),
                                               const SizedBox(width: 4),
                                               Text(
-                                                className == 'Trash Detected' ? "Dataset Tag: trash" : "Dataset Tag: clean_road",
+                                                className == 'Very Dirty Road'
+                                                    ? "Dataset Tag: very_dirty"
+                                                    : (className == 'Trash Detected' ? "Dataset Tag: trash" : "Dataset Tag: clean_road"),
                                                 style: const TextStyle(color: Color(0xFFD8B4FE), fontSize: 12, fontWeight: FontWeight.w600),
                                               ),
                                             ],
@@ -760,10 +1008,14 @@ class _FullScreenImageScreenState extends State<FullScreenImageScreen> {
             ),
             if (widget.tag != null)
               Text(
-                "Classification Tag: ${widget.tag}",
+                "Classification Tag: ${widget.tag == 'No Trash / Clean Roads' ? 'Clean Road' : widget.tag}",
                 style: TextStyle(
                   fontSize: 11,
-                  color: widget.tag == 'Trash Detected' ? const Color(0xFFFF1744) : const Color(0xFF00E676),
+                  color: widget.tag == 'Very Dirty Road'
+                      ? const Color(0xFFFF1744)
+                      : (widget.tag == 'Trash Detected'
+                          ? const Color(0xFFFF9100)
+                          : const Color(0xFF00E676)),
                   fontWeight: FontWeight.w600,
                 ),
               ),

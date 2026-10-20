@@ -9,15 +9,19 @@ import 'alerts_screen.dart';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../mock_data.dart';
 import '../services/map_cache_service.dart';
 import '../models/vehicle.dart';
 import '../models/ward.dart';
 import '../models/zone.dart';
+import '../models/garbage_flag.dart';
 import '../services/role_service.dart';
 import 'vehicle_details_screen.dart';
 import '../services/ward_zone_service.dart';
+import '../services/trash_spots_service.dart';
+import '../widgets/trash_pinpoint_marker.dart';
 
 class ActiveFleetScreen extends StatefulWidget {
   const ActiveFleetScreen({super.key});
@@ -53,11 +57,17 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
     super.initState();
     WardZoneService.instance.init();
     WardZoneService.instance.notifier.addListener(_onWardZoneUpdate);
+    TrashSpotsService.instance.init();
+    TrashSpotsService.instance.flagsNotifier.addListener(_onTrashSpotsUpdated);
     _fetchDataFromFirestore();
     _startLiveTrackingListener();
   }
 
   void _onWardZoneUpdate() {
+    if (mounted) setState(() {});
+  }
+
+  void _onTrashSpotsUpdated() {
     if (mounted) setState(() {});
   }
 
@@ -67,10 +77,21 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
       if (!mounted) return;
       setState(() {
         for (var newVehicle in vehicles) {
-          final liveData = _liveTrackingData[newVehicle.vehicleNumber] ?? _liveTrackingData[newVehicle.id];
+          Map<String, dynamic>? liveData = _liveTrackingData[newVehicle.vehicleNumber] ?? _liveTrackingData[newVehicle.id];
+          if (liveData == null) {
+            final cleanV = newVehicle.vehicleNumber.toLowerCase().replaceAll(RegExp(r'[\s\-_]'), '');
+            for (var entry in _liveTrackingData.entries) {
+              if (entry.key.toLowerCase().replaceAll(RegExp(r'[\s\-_]'), '') == cleanV) {
+                liveData = entry.value;
+                break;
+              }
+            }
+          }
           if (liveData != null) {
-            if (liveData['lat'] != null && liveData['lng'] != null) {
-              newVehicle.currentLocation = LatLng(liveData['lat'], liveData['lng']);
+            final lat = (liveData['lat'] as num?)?.toDouble();
+            final lng = (liveData['lng'] as num?)?.toDouble();
+            if (lat != null && lng != null) {
+              newVehicle.currentLocation = LatLng(lat, lng);
             }
             newVehicle.isActive = liveData['isActive'] ?? false;
             final Timestamp? ts = liveData['timestamp'] as Timestamp?;
@@ -124,7 +145,12 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
         final Timestamp? timestamp = data['timestamp'] as Timestamp?;
 
         if (lat != null && lng != null && mounted) {
-          final index = _vehicles.indexWhere((v) => v.vehicleNumber == doc.id || v.id == doc.id);
+          final cleanDocId = doc.id.toLowerCase().replaceAll(RegExp(r'[\s\-_]'), '');
+          final index = _vehicles.indexWhere((v) {
+            if (v.vehicleNumber == doc.id || v.id == doc.id) return true;
+            final cleanV = v.vehicleNumber.toLowerCase().replaceAll(RegExp(r'[\s\-_]'), '');
+            return cleanV == cleanDocId || v.id.toLowerCase() == cleanDocId;
+          });
           if (index != -1) {
             _vehicles[index].currentLocation = LatLng(lat, lng);
             _vehicles[index].isActive = isActive;
@@ -144,6 +170,7 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
   @override
   void dispose() {
     WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
+    TrashSpotsService.instance.flagsNotifier.removeListener(_onTrashSpotsUpdated);
     _liveTrackingSub?.cancel();
     _vehiclesSub?.cancel();
     _wardsSub?.cancel();
@@ -708,7 +735,7 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
           selectedWard: _selectedWard?.name ?? _selectedWardFilter,
         ),
         MarkerLayer(
-          markers: filteredVehicles.where((v) => v.currentLocation != null && v.isRunning).map((vehicle) {
+          markers: filteredVehicles.where((v) => v.currentLocation != null).map((vehicle) {
               final statusColor = Color(vehicle.stateColorValue);
               return Marker(
                 point: vehicle.currentLocation!, width: 100, height: 100,
@@ -750,7 +777,89 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
               );
             }).toList(),
         ),
+        MarkerLayer(markers: _buildTrashMarkers()),
       ],
+    );
+  }
+
+  List<Marker> _buildTrashMarkers() {
+    final flags = TrashSpotsService.instance.activeFlags;
+    final clusters = TrashSpotsService.instance.clusterFlags(flags);
+
+    return clusters.map((cluster) {
+      final flag = cluster.first;
+      final isVeryDirty = cluster.any((f) => f.className == 'Very_Dirty' || f.displayClass == 'Very Dirty');
+      return Marker(
+        point: LatLng(flag.lat, flag.lng),
+        width: 38,
+        height: 46,
+        alignment: Alignment.topCenter,
+        child: TrashPinpointWidget(
+          count: cluster.length,
+          isVeryDirty: isVeryDirty,
+          onTap: () => _showTrashPopup(flag),
+        ),
+      );
+    }).toList();
+  }
+
+  void _showTrashPopup(GarbageFlag flag) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+        title: Text(
+          '${flag.className.replaceAll('_', ' ')} - ${flag.displayClass}',
+          style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+        ),
+        content: SizedBox(
+          width: 450,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.network(
+                  flag.imageUrl,
+                  headers: const {"ngrok-skip-browser-warning": "true"},
+                  height: 220,
+                  width: double.infinity,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => Container(
+                    height: 200,
+                    color: Colors.grey.shade200,
+                    child: const Center(child: Icon(Icons.broken_image, size: 40, color: Colors.grey)),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text("Confidence: ${(flag.confidence * 100).toStringAsFixed(1)}%", style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 4),
+              Text("Vehicle: ${flag.vehicleNumber}", style: const TextStyle(color: Colors.black87)),
+              const SizedBox(height: 4),
+              Text("Location: ${flag.zone} - ${flag.ward}", style: const TextStyle(color: Colors.black54, fontSize: 12)),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close', style: TextStyle(color: Colors.black54)),
+          ),
+          ElevatedButton.icon(
+            icon: const Icon(Icons.directions_outlined, size: 18),
+            label: const Text('Directions'),
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0F5132), foregroundColor: Colors.white),
+            onPressed: () async {
+              final url = Uri.parse('https://www.google.com/maps/dir/?api=1&destination=${flag.lat},${flag.lng}');
+              if (await canLaunchUrl(url)) {
+                await launchUrl(url);
+              }
+            },
+          ),
+        ],
+      ),
     );
   }
 }

@@ -175,9 +175,9 @@ class TelemetryService extends ChangeNotifier {
         position.timestamp.millisecondsSinceEpoch,
       );
       
-      // Push live tracking and daily stats to Firestore throttled (every 5 seconds)
+      // Push live tracking and daily stats to Firestore throttled (every 2 seconds for smooth real-time tracking)
       final now = DateTime.now();
-      if (_lastFirestoreWrite == null || now.difference(_lastFirestoreWrite!).inSeconds >= 5) {
+      if (_lastFirestoreWrite == null || now.difference(_lastFirestoreWrite!).inSeconds >= 2) {
         _lastFirestoreWrite = now;
 
         final auth = AuthService();

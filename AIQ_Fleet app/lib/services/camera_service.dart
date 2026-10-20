@@ -408,6 +408,29 @@ class CameraService extends ChangeNotifier {
   CameraController? get controller => _controller;
   bool get isRecording => _isRecording;
   bool get isInitialized => _controller != null && _controller!.value.isInitialized;
+  bool get isCameraOn => isInitialized;
+  bool get isModelConnected => _isGarbageBackendConnected;
+
+  Future<void> turnCameraOff() async {
+    if (_controller != null) {
+      if (_isAutoCapturing) {
+        _autoCaptureTimer?.cancel();
+        _isAutoCapturing = false;
+      }
+      if (_isTrainingCapturing) {
+        _trainingCaptureTimer?.cancel();
+        _isTrainingCapturing = false;
+      }
+      await _controller?.dispose();
+      _controller = null;
+      notifyListeners();
+    }
+  }
+
+  Future<void> turnCameraOn() async {
+    await initialize();
+  }
+
   String? errorMessage;
 
   Future<void> _fetchWardsAndZones() async {
@@ -813,13 +836,16 @@ class CameraService extends ChangeNotifier {
       debugPrint("Firestore stats update error: $fbStatErr");
     }
 
+    final mobilenetResult = resBody['mobilenet_result'];
     final combinedResult = <String, dynamic>{
       'garbage': {
         'road_status': roadStatus,
         'road_confidence': confidence,
+        'mobilenet_result': mobilenetResult,
       },
       'road_status': roadStatus,
       'confidence': confidence,
+      'mobilenet_result': mobilenetResult,
     };
 
     // Download annotated image or fallback to raw
@@ -854,7 +880,11 @@ class CameraService extends ChangeNotifier {
       }
 
       // Insert to local database if trash detected
-      if (roadStatus == 'Trash Detected') {
+      final rs = roadStatus.toLowerCase().trim();
+      final isTrash = (rs == 'trash detected' || rs.contains('trash detected') || rs.contains('dirty')) &&
+          !rs.contains('no trash') && !rs.contains('clean');
+
+      if (isTrash) {
         await DatabaseService().insertLocalFlag(localFile.path, roadStatus, confidence, timestamp, lat, lng);
       }
     } catch (e) {
@@ -862,12 +892,17 @@ class CameraService extends ChangeNotifier {
     }
 
     if (imageUrl != null) {
-      if (roadStatus == 'Trash Detected') {
+      final rs = roadStatus.toLowerCase().trim();
+      final isTrash = (rs == 'trash detected' || rs.contains('trash detected') || rs.contains('dirty')) &&
+          !rs.contains('no trash') && !rs.contains('clean');
+
+      if (isTrash) {
         try {
           await FirebaseFirestore.instance.collection('trash_spots').add({
             'lat': lat,
             'lng': lng,
             'road_status': roadStatus,
+            'display_class': resBody['display_class'] ?? roadStatus,
             'confidence': confidence,
             'image_url': '$activeGarbageAiUrl$imageUrl',
             'timestamp': FieldValue.serverTimestamp(),
@@ -875,7 +910,9 @@ class CameraService extends ChangeNotifier {
             'vehicle_number': vehicleNumber,
             'ward': ward,
             'zone': zone,
-            'model_version': MODEL_VERSION,
+            'model_version': 'v7_mobilenetv3',
+            'trash_count': (resBody['trash_count'] as num?)?.toInt() ?? 1,
+            'mobilenet_result': mobilenetResult,
             if (sessionId != null) 'session_id': sessionId,
             if (pointType != null) 'point_type': pointType,
           });

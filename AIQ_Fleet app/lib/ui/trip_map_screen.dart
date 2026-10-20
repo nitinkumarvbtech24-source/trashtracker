@@ -12,9 +12,15 @@ class TrailSegment {
   TrailSegment({required this.start, required this.end, required this.color});
 
   factory TrailSegment.fromJson(Map<String, dynamic> json) => TrailSegment(
-    start: LatLng(json['startLat'], json['startLng']),
-    end: LatLng(json['endLat'], json['endLng']),
-    color: Color(json['color']),
+    start: LatLng(
+      ((json['startLat'] ?? json['start_lat'] ?? 0.0) as num).toDouble(),
+      ((json['startLng'] ?? json['start_lng'] ?? 0.0) as num).toDouble(),
+    ),
+    end: LatLng(
+      ((json['endLat'] ?? json['end_lat'] ?? 0.0) as num).toDouble(),
+      ((json['endLng'] ?? json['end_lng'] ?? 0.0) as num).toDouble(),
+    ),
+    color: Color((json['color'] as num?)?.toInt() ?? 0xFF00E676),
   );
 }
 
@@ -72,7 +78,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
       final List<Map<String, dynamic>> filteredSpots = [];
       for (var spotDoc in spotsSnapshot.docs) {
         final data = spotDoc.data();
-        if (data['status'] == 'Resolved') continue; 
+        if (data['status'] == 'Resolved' || data['status'] == 'Deflagged') continue; 
         
         // Filter by active model version
         final mv = data['model_version'] ?? data['modelVersion'];
@@ -86,6 +92,30 @@ class _TripMapScreenState extends State<TripMapScreen> {
           if (widget.startTime != null && spotTime.isBefore(widget.startTime!)) continue;
           if (widget.endTime != null && spotTime.isAfter(widget.endTime!)) continue;
         }
+
+        // Only flag actual trash detections
+        final roadStatus = (data['road_status'] ?? '').toString().toLowerCase().trim();
+        final displayClass = (data['display_class'] ?? '').toString().toLowerCase().trim();
+        final className = (data['class'] ?? '').toString().toLowerCase().trim();
+
+        if (roadStatus.contains('no trash') || roadStatus.contains('no_trash') || roadStatus.contains('clean') || roadStatus.contains('not a road') ||
+            displayClass.contains('no trash') || displayClass.contains('no_trash') || displayClass.contains('clean') || displayClass.contains('not a road') ||
+            className.contains('no trash') || className.contains('no_trash') || className.contains('clean') || className.contains('not a road')) {
+          continue;
+        }
+
+        final trashCount = (data['trash_count'] as num?)?.toInt();
+        if (trashCount != null && trashCount <= 0 && !roadStatus.contains('dirty') && !displayClass.contains('dirty') && !className.contains('dirty')) {
+          continue;
+        }
+
+        final isTrash = roadStatus.contains('trash') || roadStatus.contains('dirty') ||
+            displayClass.contains('trash') || displayClass.contains('dirty') ||
+            className.contains('trash') || className.contains('dirty') ||
+            (trashCount != null && trashCount > 0);
+
+        if (!isTrash) continue;
+
         data['id'] = spotDoc.id;
         filteredSpots.add(data);
       }

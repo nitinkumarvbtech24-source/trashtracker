@@ -5,6 +5,8 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:upgrader/upgrader.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:http/http.dart' as http;
+import 'package:lucide_icons/lucide_icons.dart';
 import '../constants.dart';
 import 'training_database_screen.dart';
 
@@ -231,9 +233,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text('Model Version', style: GoogleFonts.inter(fontSize: 14, color: Colors.white)),
-                      Text('V7 (Port 5001)', style: GoogleFonts.inter(fontSize: 14, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                      Text('V7 + MobileNetV3 (Port 5001)', style: GoogleFonts.inter(fontSize: 14, color: Colors.greenAccent, fontWeight: FontWeight.bold)),
                     ],
                   ),
+                  const SizedBox(height: 4),
+                  Text('YOLOv7 (Object Detection) + MobileNetV3 (Cleanliness Classification)', style: GoogleFonts.inter(fontSize: 11, color: Colors.white38)),
                   const SizedBox(height: 16),
                   const Divider(color: Colors.white10),
                   const SizedBox(height: 16),
@@ -271,6 +275,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       label: const Text('Add New Link', style: TextStyle(color: Colors.greenAccent)),
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: Colors.greenAccent),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: _showAISettingsDialog,
+                      icon: const Icon(Icons.tune_rounded, color: Colors.white, size: 18),
+                      label: const Text('AI Model Settings & Thresholds', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF0F5132),
                         padding: const EdgeInsets.symmetric(vertical: 12),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                       ),
@@ -407,6 +425,217 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ),
       ),
+    );
+  }
+
+  void _showAISettingsDialog() async {
+    final baseUrl = activeGarbageAiUrl;
+    
+    double currentThreshold = 0.25;
+    double veryDirtyThreshold = 0.50;
+    bool isLoading = true;
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            if (isLoading) {
+              http.get(Uri.parse('$baseUrl/api/settings')).then((res) {
+                if (res.statusCode == 200) {
+                  final data = json.decode(res.body);
+                  setDialogState(() {
+                    currentThreshold = (data['confidence_threshold'] as num?)?.toDouble() ?? 0.25;
+                    veryDirtyThreshold = (data['very_dirty_threshold'] as num?)?.toDouble() ?? 0.50;
+                    isLoading = false;
+                  });
+                } else {
+                  setDialogState(() => isLoading = false);
+                }
+              }).catchError((e) {
+                setDialogState(() => isLoading = false);
+              });
+            }
+
+            return AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0F5132).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(LucideIcons.sliders, color: Color(0xFF0F5132), size: 20),
+                  ),
+                  const SizedBox(width: 12),
+                  const Text('AI Model Settings', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                ],
+              ),
+              content: isLoading 
+                ? const SizedBox(height: 140, child: Center(child: CircularProgressIndicator(color: Color(0xFF0F5132))))
+                : SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Section 1: Very Dirty Road Confidence Level Setter (MobileNetV3)
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.red.withOpacity(0.06),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.red.withOpacity(0.2)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Row(
+                                    children: const [
+                                      Icon(Icons.warning_amber_rounded, size: 18, color: Colors.red),
+                                      SizedBox(width: 6),
+                                      Text('Very Dirty Road Confidence', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.red)),
+                                    ],
+                                  ),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.red.withOpacity(0.15),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Text('${(veryDirtyThreshold * 100).toInt()}%', style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 13)),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Slider(
+                                value: veryDirtyThreshold,
+                                min: 0.20,
+                                max: 0.95,
+                                divisions: 15,
+                                activeColor: Colors.redAccent,
+                                label: '${(veryDirtyThreshold * 100).toInt()}%',
+                                onChanged: (val) {
+                                  setDialogState(() => veryDirtyThreshold = val);
+                                },
+                              ),
+                              Wrap(
+                                spacing: 6,
+                                children: [0.35, 0.50, 0.70, 0.85].map((preset) {
+                                  final isSel = (veryDirtyThreshold - preset).abs() < 0.03;
+                                  return ChoiceChip(
+                                    label: Text('${(preset * 100).toInt()}%', style: TextStyle(fontSize: 11, color: isSel ? Colors.white : Colors.black87)),
+                                    selected: isSel,
+                                    selectedColor: Colors.redAccent,
+                                    backgroundColor: Colors.white,
+                                    onSelected: (_) => setDialogState(() => veryDirtyThreshold = preset),
+                                    visualDensity: VisualDensity.compact,
+                                  );
+                                }).toList(),
+                              ),
+                              const SizedBox(height: 6),
+                              const Text('MobileNetV3 classifier threshold required to escalate trash-detected road frames to "VERY DIRTY ROAD" (red alert).', style: TextStyle(fontSize: 11, color: Colors.black54)),
+                            ],
+                          ),
+                        ),
+
+                        const SizedBox(height: 16),
+
+                        // Section 2: YOLO Detection Confidence
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF0F5132).withOpacity(0.04),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFF0F5132).withOpacity(0.15)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  const Text('YOLO Detection Confidence', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF0F5132))),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF0F5132).withOpacity(0.12),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Text('${(currentThreshold * 100).toInt()}%', style: const TextStyle(color: Color(0xFF0F5132), fontWeight: FontWeight.bold, fontSize: 13)),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Slider(
+                                value: currentThreshold,
+                                min: 0.1,
+                                max: 0.9,
+                                divisions: 16,
+                                activeColor: const Color(0xFF0F5132),
+                                label: '${(currentThreshold * 100).toInt()}%',
+                                onChanged: (val) {
+                                  setDialogState(() => currentThreshold = val);
+                                },
+                              ),
+                              Wrap(
+                                spacing: 6,
+                                children: [0.15, 0.25, 0.40, 0.60].map((preset) {
+                                  final isSel = (currentThreshold - preset).abs() < 0.03;
+                                  return ChoiceChip(
+                                    label: Text('${(preset * 100).toInt()}%', style: TextStyle(fontSize: 11, color: isSel ? Colors.white : Colors.black87)),
+                                    selected: isSel,
+                                    selectedColor: const Color(0xFF0F5132),
+                                    backgroundColor: Colors.white,
+                                    onSelected: (_) => setDialogState(() => currentThreshold = preset),
+                                    visualDensity: VisualDensity.compact,
+                                  );
+                                }).toList(),
+                              ),
+                              const SizedBox(height: 6),
+                              const Text('Initial candidate threshold: Lower = more detections, higher false positives; Higher = strictly visible trash.', style: TextStyle(fontSize: 11, color: Colors.black54)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              actions: [
+                TextButton(
+                  onPressed: isLoading ? null : () => Navigator.pop(context),
+                  child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+                ),
+                ElevatedButton(
+                  onPressed: isLoading ? null : () async {
+                    setDialogState(() => isLoading = true);
+                    try {
+                      await http.post(
+                        Uri.parse('$baseUrl/api/settings'),
+                        headers: {'Content-Type': 'application/json'},
+                        body: json.encode({
+                          'confidence_threshold': currentThreshold,
+                          'very_dirty_threshold': veryDirtyThreshold,
+                        }),
+                      );
+                    } catch (e) {
+                      debugPrint('Error saving settings: $e');
+                    }
+                    if (context.mounted) Navigator.pop(context);
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0F5132)),
+                  child: const Text('Save Changes', style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            );
+          }
+        );
+      }
     );
   }
 }

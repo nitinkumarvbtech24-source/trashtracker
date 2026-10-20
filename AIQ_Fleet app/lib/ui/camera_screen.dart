@@ -546,15 +546,27 @@ class _CameraScreenState extends State<CameraScreen> {
                                       ],
                                     );
                                   }
-                                  String rawGarbage = (res?['garbage']?['road_status']?.toString() ?? 'UNKNOWN');
+                                  String rawGarbage = (res?['garbage']?['road_status']?.toString() ?? res?['road_status']?.toString() ?? 'UNKNOWN');
                                   String garbageStatus;
-                                  if (rawGarbage == 'Clean Road') {
-                                    garbageStatus = 'NO TRASH DETECTED';
-                                  } else if (rawGarbage == 'Slightly Dirty Road' || rawGarbage == 'Very Dirty Road') {
+                                  Color statusColor;
+                                  if (rawGarbage == 'Clean Road' || rawGarbage == 'No Trash Detected') {
+                                    garbageStatus = 'CLEAN ROAD';
+                                    statusColor = const Color(0xFF22C55E);
+                                  } else if (rawGarbage == 'Very Dirty Road' || rawGarbage == 'Very Dirty') {
+                                    garbageStatus = 'VERY DIRTY';
+                                    statusColor = const Color(0xFFEF4444);
+                                  } else if (rawGarbage == 'Trash Detected' || rawGarbage == 'Slightly Dirty Road') {
                                     garbageStatus = 'TRASH DETECTED';
+                                    statusColor = const Color(0xFFF97316);
                                   } else {
                                     garbageStatus = rawGarbage.replaceAll('_', ' ').toUpperCase();
+                                    statusColor = Colors.white;
                                   }
+
+                                  final mobilenetInfo = res?['garbage']?['mobilenet_result'] ?? res?['mobilenet_result'];
+                                  final bool hasMobilenet = mobilenetInfo != null && mobilenetInfo['invoked'] == true;
+                                  final String mobilenetClass = (mobilenetInfo?['class'] ?? '').toString();
+
                                   String healthStatus = (res?['health']?['road_status']?.toString() ?? 'UNKNOWN').replaceAll('_', ' ').toUpperCase();
                                   if (rawGarbage == 'NOT A ROAD') {
                                     return Column(
@@ -567,7 +579,36 @@ class _CameraScreenState extends State<CameraScreen> {
                                   } else {
                                     return Column(
                                       children: [
-                                        Text("Cleanliness: $garbageStatus", textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: [
+                                            Icon(
+                                              garbageStatus == 'CLEAN ROAD'
+                                                  ? Icons.check_circle_rounded
+                                                  : (garbageStatus == 'VERY DIRTY' ? Icons.error_rounded : Icons.warning_amber_rounded),
+                                              color: statusColor,
+                                              size: 16,
+                                            ),
+                                            const SizedBox(width: 6),
+                                            Text(
+                                              "Cleanliness: $garbageStatus",
+                                              textAlign: TextAlign.center,
+                                              style: TextStyle(color: statusColor, fontSize: 14, fontWeight: FontWeight.bold),
+                                            ),
+                                          ],
+                                        ),
+                                        if (hasMobilenet)
+                                          Padding(
+                                            padding: const EdgeInsets.only(top: 2),
+                                            child: Text(
+                                              "MobileNetV3: ${mobilenetClass == 'very_dirty' ? 'Very Dirty (${((mobilenetInfo['prob_very_dirty'] ?? 0.0) * 100).toStringAsFixed(0)}%)' : 'Clean Road (${((mobilenetInfo['prob_clean'] ?? 0.0) * 100).toStringAsFixed(0)}%)'}",
+                                              style: TextStyle(
+                                                color: mobilenetClass == 'very_dirty' ? const Color(0xFFEF4444) : const Color(0xFF22C55E),
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                          ),
                                         const SizedBox(height: 2),
                                         Text("Road Health: $healthStatus", textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
                                         const SizedBox(height: 2),

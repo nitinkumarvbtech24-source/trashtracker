@@ -1,0 +1,78 @@
+# ============================================================
+# Garbage AI – MobileNetV3 Model Configuration
+# Classes: clean_road  |  very_dirty
+# ============================================================
+
+model:
+  name: "MobileNetV3-Large"
+  variant: "mobilenet_v3_large"      # torchvision model key
+  pretrained: true                   # ImageNet pretrained backbone
+  num_classes: 2                     # binary road classification
+  dropout: 0.3
+
+dataset:
+  root: "e:/nitin/models/Garbage_ai_mobilenetv3/dataset_split"
+  raw_root: "e:/nitin/models/Garbage_ai_mobilenetv3/dataset"  # original flat folder
+  classes:
+    - "clean roads"                  # maps to class index 0
+    - "very dirty"                   # maps to class index 1
+  train_ratio: 0.75
+  val_ratio:   0.15
+  test_ratio:  0.10
+  image_size: 384                    # larger than 224 – captures fine road detail
+  num_workers: 4
+  seed: 42
+
+training:
+  epochs: 60
+  batch_size: 16
+  learning_rate: 0.0003
+  weight_decay: 0.0001
+  optimizer: "adamw"
+  scheduler: "cosine_warmup"         # cosine with linear warmup
+  warmup_epochs: 5
+  early_stopping_patience: 15
+  label_smoothing: 0.1               # prevents overconfidence on small dataset
+  mixup_alpha: 0.3                   # MixUp augmentation coefficient
+  seed: 42
+  device: "auto"
+
+# ── Augmentation pipeline ─────────────────────────────────────
+# Designed for road imagery: camera angles, lighting, shadows, occlusion
+augmentation:
+  train:
+    resize: 420                      # slightly larger then random crop
+    crop:   384
+    random_horizontal_flip: true
+    random_vertical_flip:   false
+    rotation_degrees: 30             # roads can be taken at odd angles
+    affine:
+      translate: [0.1, 0.1]
+      scale:     [0.85, 1.15]
+      shear:     10
+    perspective_distortion: 0.3      # simulate drone / camera tilt
+    color_jitter:
+      brightness: 0.4
+      contrast:   0.4
+      saturation: 0.3
+      hue:        0.08
+    gaussian_blur:
+      prob: 0.3
+      kernel_size: [3, 7]
+    random_grayscale_prob: 0.05      # occasional greyscale for robustness
+    random_erasing_prob:   0.25      # simulate occlusion / partial view
+    random_erasing_scale:  [0.02, 0.15]
+    normalize:
+      mean: [0.485, 0.456, 0.406]
+      std:  [0.229, 0.224, 0.225]
+  val_test:
+    resize: 420
+    center_crop: 384
+    normalize:
+      mean: [0.485, 0.456, 0.406]
+      std:  [0.229, 0.224, 0.225]
+
+export:
+  format: "onnx"
+  opset: 17
+  dynamic_axes: true

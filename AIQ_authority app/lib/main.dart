@@ -13,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'services/map_cache_service.dart';
 import 'services/role_service.dart';
 import 'services/ward_zone_service.dart';
+import 'services/trash_spots_service.dart';
 import 'constants.dart';
 
 void main() async {
@@ -22,6 +23,7 @@ void main() async {
   );
   await MapCacheService.init();
   WardZoneService.instance.init();
+  TrashSpotsService.instance.init();
 
   final prefs = await SharedPreferences.getInstance();
   final savedUrl = prefs.getString('garbage_ai_url');
@@ -127,8 +129,10 @@ class _AppRootState extends State<AppRoot> {
 
     if (isLoggedIn) {
       final role = prefs.getString('userRole');
+      final zone = prefs.getString('userZone');
+      final ward = prefs.getString('userWard');
       if (role != null) {
-        RoleService.setCurrentUserRole(role);
+        RoleService.setCurrentUserRole(role, zone: zone, ward: ward);
       }
     }
 

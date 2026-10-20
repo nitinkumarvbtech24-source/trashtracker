@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'ward_zone_service.dart';
 
 class RoleService {
   static final List<String> modules = [
@@ -46,6 +47,8 @@ class RoleService {
   }
 
   static String? get currentUserRoleTitle => _currentUserRoleTitle;
+  static String? get currentUserZone => _currentUserZone;
+  static String? get currentUserWard => _currentUserWard;
 
   static void _updateCurrentUserPermissions() {
     if (_currentUserRoleTitle != null && globalRoles != null) {
@@ -54,6 +57,14 @@ class RoleService {
   }
 
   static bool hasAllAccess(String moduleName) {
+    if (_currentUserRoleTitle == 'Super Admin') return true;
+    // Area-restricted users (e.g. Ward Officer or Zone Officer) never have all access
+    if (_currentUserWard != null && _currentUserWard != 'All Wards' && _currentUserWard!.trim().isNotEmpty) {
+      return false;
+    }
+    if (_currentUserZone != null && _currentUserZone != 'All Zones' && _currentUserZone!.trim().isNotEmpty) {
+      return false;
+    }
     final perms = currentUserPermissions.value?[moduleName];
     if (perms == null) return false;
     if (perms['viewAccess'] == 'All Data (All Zones & Wards)') return true;
@@ -63,31 +74,52 @@ class RoleService {
   }
 
   static List<String> getAllowedZonesForModule(String moduleName) {
+    if (_currentUserZone != null && _currentUserZone != 'All Zones' && _currentUserZone!.trim().isNotEmpty) {
+      return [_currentUserZone!];
+    }
+    if (_currentUserWard != null && _currentUserWard != 'All Wards' && _currentUserWard!.trim().isNotEmpty) {
+      final wardNameClean = _currentUserWard!.trim().toLowerCase();
+      for (var z in WardZoneService.instance.zones) {
+        final matchingWards = WardZoneService.instance.getWardsForZone(z.name);
+        if (matchingWards.any((w) => w.trim().toLowerCase() == wardNameClean)) {
+          return [z.name];
+        }
+      }
+    }
     if (hasAllAccess(moduleName)) return []; // Empty means all allowed
     final perms = currentUserPermissions.value?[moduleName];
     if (perms == null) return [];
-    List<String> roleZones = List<String>.from(perms['zones'] ?? []);
-    if (_currentUserZone != null && _currentUserZone != 'All Zones' && _currentUserZone!.isNotEmpty) {
-      if (roleZones.contains(_currentUserZone) || roleZones.contains('All Zones')) {
-         return [_currentUserZone!];
-      }
-      return []; // Conflict: User assigned zone not allowed by Role
-    }
-    return roleZones;
+    return List<String>.from(perms['zones'] ?? []);
   }
 
   static List<String> getAllowedWardsForModule(String moduleName) {
+    if (_currentUserWard != null && _currentUserWard != 'All Wards' && _currentUserWard!.trim().isNotEmpty) {
+      return [_currentUserWard!];
+    }
+    if (_currentUserZone != null && _currentUserZone != 'All Zones' && _currentUserZone!.trim().isNotEmpty) {
+      final zoneWards = WardZoneService.instance.getWardsForZone(_currentUserZone!);
+      if (zoneWards.isNotEmpty) return zoneWards;
+    }
     if (hasAllAccess(moduleName)) return []; // Empty means all allowed
     final perms = currentUserPermissions.value?[moduleName];
     if (perms == null) return [];
-    List<String> roleWards = List<String>.from(perms['wards'] ?? []);
-    if (_currentUserWard != null && _currentUserWard != 'All Wards' && _currentUserWard!.isNotEmpty) {
-      if (roleWards.contains(_currentUserWard) || roleWards.contains('All Wards')) {
-         return [_currentUserWard!];
-      }
-      return []; // Conflict: User assigned ward not allowed by Role
+    return List<String>.from(perms['wards'] ?? []);
+  }
+
+  static bool isSpotAllowed(double lat, double lng, String? docZone, String? docWard, String moduleName) {
+    if (hasAllAccess(moduleName)) return true;
+    final allowedWards = getAllowedWardsForModule(moduleName);
+    final allowedZones = getAllowedZonesForModule(moduleName);
+
+    if (allowedWards.isNotEmpty) {
+      return allowedWards.any((targetWard) =>
+          WardZoneService.instance.matchesWard(lat: lat, lng: lng, docWard: docWard, targetWard: targetWard));
     }
-    return roleWards;
+    if (allowedZones.isNotEmpty) {
+      return allowedZones.any((targetZone) =>
+          WardZoneService.instance.matchesZone(lat: lat, lng: lng, docZone: docZone, targetZone: targetZone));
+    }
+    return true;
   }
 
   static List<Map<String, dynamic>> _getDefaultRoles(List<String> allZones, List<String> allWards) {

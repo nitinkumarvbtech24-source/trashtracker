@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -10,6 +11,8 @@ import 'comnd_deflag_screen.dart';
 import '../constants.dart';
 import '../widgets/trash_pinpoint_marker.dart';
 import '../services/ward_zone_service.dart';
+import '../services/trash_spots_service.dart';
+import '../models/garbage_flag.dart';
 
 class ComndScreen extends StatefulWidget {
   const ComndScreen({super.key});
@@ -40,12 +43,18 @@ class _ComndScreenState extends State<ComndScreen> {
   List<String> _zones = ['All Zones'];
   List<String> _wards = ['All Wards'];
 
+  StreamSubscription? _liveTrackingSub;
+  Map<String, Map<String, dynamic>> _liveVehicles = {};
+
   @override
   void initState() {
     super.initState();
     WardZoneService.instance.init();
     WardZoneService.instance.notifier.addListener(_onWardZoneUpdate);
+    TrashSpotsService.instance.init();
+    TrashSpotsService.instance.flagsNotifier.addListener(_onWardZoneUpdate);
     _fetchZonesAndWards();
+    _startLiveTrackingListener();
   }
 
   void _onWardZoneUpdate() {
@@ -55,7 +64,25 @@ class _ComndScreenState extends State<ComndScreen> {
   @override
   void dispose() {
     WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
+    TrashSpotsService.instance.flagsNotifier.removeListener(_onWardZoneUpdate);
+    _liveTrackingSub?.cancel();
     super.dispose();
+  }
+
+  void _startLiveTrackingListener() {
+    _liveTrackingSub = FirebaseFirestore.instance.collection('live_tracking').snapshots().listen((snap) {
+      if (!mounted) return;
+      setState(() {
+        for (var doc in snap.docs) {
+          final data = doc.data();
+          final lat = (data['lat'] as num?)?.toDouble();
+          final lng = (data['lng'] as num?)?.toDouble();
+          if (lat != null && lng != null) {
+            _liveVehicles[doc.id] = data;
+          }
+        }
+      });
+    });
   }
 
   Future<void> _fetchZonesAndWards() async {
@@ -63,14 +90,106 @@ class _ComndScreenState extends State<ComndScreen> {
       final zonesSnap = await FirebaseFirestore.instance.collection('zones').get();
       final wardsSnap = await FirebaseFirestore.instance.collection('wards').get();
       if (mounted) {
+        final allFetchedZones = zonesSnap.docs.map((d) => (d.data()['name'] ?? d.id).toString()).toList();
+        final allFetchedWards = wardsSnap.docs.map((d) => (d.data()['name'] ?? d.id).toString()).toList();
+
+        final userWard = RoleService.currentUserWard;
+        final userZone = RoleService.currentUserZone;
+
+        List<String> zList = ['All Zones', ...allFetchedZones];
+        List<String> wList = ['All Wards', ...allFetchedWards];
+        String selZone = _vehicleSelectedZone;
+        String selWard = _vehicleSelectedWard;
+
+        // If restricted to a specific ward by Role
+        if (userWard != null && userWard.trim().isNotEmpty && userWard != 'All Wards') {
+          wList = [userWard];
+          selWard = userWard;
+          if (userZone != null && userZone.trim().isNotEmpty && userZone != 'All Zones') {
+            zList = [userZone];
+            selZone = userZone;
+          }
+        } else if (userZone != null && userZone.trim().isNotEmpty && userZone != 'All Zones') {
+          // If restricted to a specific zone by Role
+          zList = [userZone];
+          selZone = userZone;
+          final zoneWards = WardZoneService.instance.getWardsForZone(userZone);
+          if (zoneWards.isNotEmpty) {
+            wList = ['All Wards', ...zoneWards];
+          }
+        }
+
         setState(() {
-          _zones = ['All Zones', ...zonesSnap.docs.map((d) => (d.data()['name'] ?? d.id).toString()).toList()];
-          _wards = ['All Wards', ...wardsSnap.docs.map((d) => (d.data()['name'] ?? d.id).toString()).toList()];
+          _zones = zList.toSet().toList();
+          _wards = wList.toSet().toList();
+          _vehicleSelectedZone = selZone;
+          _vehicleSelectedWard = selWard;
         });
+
+        _zoomToSelectedArea(_vehicleSelectedZone, _vehicleSelectedWard);
       }
     } catch (e) {
       debugPrint("Error fetching zones/wards: $e");
     }
+  }
+
+  void _zoomToSelectedArea(String zone, String ward) {
+    try {
+      if (ward != 'All Wards') {
+        final matches = WardZoneService.instance.wards.where(
+          (w) => w.name.trim().toLowerCase() == ward.trim().toLowerCase(),
+        );
+        if (matches.isNotEmpty && matches.first.boundary.isNotEmpty) {
+          final b = matches.first.boundary;
+          double cLat = 0, cLng = 0;
+          for (var p in b) {
+            cLat += p.latitude;
+            cLng += p.longitude;
+          }
+          _vehicleMapController.move(LatLng(cLat / b.length, cLng / b.length), 15.0);
+          return;
+        }
+      } else if (zone != 'All Zones') {
+        final matches = WardZoneService.instance.zones.where(
+          (z) => z.name.trim().toLowerCase() == zone.trim().toLowerCase(),
+        );
+        if (matches.isNotEmpty && matches.first.boundary.isNotEmpty) {
+          final b = matches.first.boundary;
+          double cLat = 0, cLng = 0;
+          for (var p in b) {
+            cLat += p.latitude;
+            cLng += p.longitude;
+          }
+          _vehicleMapController.move(LatLng(cLat / b.length, cLng / b.length), 13.8);
+          return;
+        }
+      }
+    } catch (_) {}
+  }
+
+  void _onZoneChanged(String? newZone) {
+    if (newZone == null) return;
+    setState(() {
+      _vehicleSelectedZone = newZone;
+      if (newZone == 'All Zones') {
+        _wards = ['All Wards', ...WardZoneService.instance.wards.map((w) => w.name).toSet()];
+      } else {
+        final zoneWards = WardZoneService.instance.getWardsForZone(newZone);
+        _wards = ['All Wards', ...zoneWards];
+        if (_vehicleSelectedWard != 'All Wards' && !zoneWards.contains(_vehicleSelectedWard)) {
+          _vehicleSelectedWard = 'All Wards';
+        }
+      }
+    });
+    _zoomToSelectedArea(newZone, _vehicleSelectedWard);
+  }
+
+  void _onWardChanged(String? newWard) {
+    if (newWard == null) return;
+    setState(() {
+      _vehicleSelectedWard = newWard;
+    });
+    _zoomToSelectedArea(_vehicleSelectedZone, newWard);
   }
 
   Future<void> _openMaps(double lat, double lng) async {
@@ -286,10 +405,6 @@ class _ComndScreenState extends State<ComndScreen> {
   // TAB 1: FLAGS BY VEHICLES
   // ==========================================
   Widget _buildFlagsByVehiclesView(bool isMobile) {
-    final allowedZones = RoleService.getAllowedZonesForModule('COM&D');
-    final allowedWards = RoleService.getAllowedWardsForModule('COM&D');
-    final hasAllAccess = RoleService.hasAllAccess('COM&D') || (allowedZones.isEmpty && allowedWards.isEmpty);
-
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance.collection('trash_spots').snapshots(),
       builder: (context, snapshot) {
@@ -298,40 +413,66 @@ class _ComndScreenState extends State<ComndScreen> {
         }
 
         final docs = snapshot.data?.docs ?? [];
-        List<Map<String, dynamic>> allFlags = [];
+        final Map<String, Map<String, dynamic>> flagsMap = {};
 
         for (var doc in docs) {
-          final data = doc.data() as Map<String, dynamic>;
+          final data = Map<String, dynamic>.from(doc.data() as Map<String, dynamic>);
           data['id'] = doc.id;
 
-          // Only Trash Detected
+          // Check if Trash Detected
           final roadStatus = (data['road_status'] ?? '').toString();
-          if (roadStatus != 'Trash Detected') continue;
+          final displayClass = (data['display_class'] ?? '').toString();
+          final className = (data['class'] ?? '').toString();
+          final trashCount = (data['trash_count'] as num?)?.toInt();
+          final isTrash = GarbageFlag.isTrashDetectedSpot(
+            roadStatus: roadStatus,
+            displayClass: displayClass,
+            className: className,
+            trashCount: trashCount,
+          );
+          if (!isTrash) continue;
 
-          // Model version filter
-          final mv = data['model_version'] ?? data['modelVersion'];
-          if (mv != null) {
-            final s = mv.toString().toLowerCase().trim();
-            if (s != MODEL_VERSION.toString() && s != 'v$MODEL_VERSION') continue;
-          } else {
+          // Geographic access filter via RoleService
+          final docZone = (data['zone'] ?? '').toString().trim();
+          final docWard = (data['ward'] ?? '').toString().trim();
+          final lat = ((data['lat'] ?? 0.0) as num).toDouble();
+          final lng = ((data['lng'] ?? 0.0) as num).toDouble();
+
+          if (!RoleService.isSpotAllowed(lat, lng, docZone, docWard, 'COM&D')) {
             continue;
           }
 
-          // Geographic access filter
-          final docZone = (data['zone'] ?? '').toString().trim();
-          final docWard = (data['ward'] ?? '').toString().trim();
-          bool hasAccess = hasAllAccess;
-          if (!hasAccess && allowedZones.isNotEmpty) {
-            hasAccess = allowedZones.any((z) => z.trim().toLowerCase() == docZone.toLowerCase());
-          }
-          if (!hasAccess && allowedWards.isNotEmpty) {
-            hasAccess = allowedWards.any((w) => w.trim().toLowerCase() == docWard.toLowerCase());
-          }
+          flagsMap[doc.id] = data;
+        }
 
-          if (hasAccess) {
-            allFlags.add(data);
+        // Merge backend trash detected flags
+        for (var f in TrashSpotsService.instance.allFlags) {
+          if (!f.isTrashReport) continue;
+          if (!flagsMap.containsKey(f.id)) {
+            if (!RoleService.isSpotAllowed(f.lat, f.lng, f.zone, f.ward, 'COM&D')) {
+              continue;
+            }
+
+            flagsMap[f.id] = {
+              'id': f.id,
+              'lat': f.lat,
+              'lng': f.lng,
+              'road_status': f.displayClass.isNotEmpty ? f.displayClass : 'Trash Detected',
+              'display_class': f.displayClass,
+              'class': f.className,
+              'confidence': f.confidence,
+              'image_url': f.imageUrl,
+              'timestamp': Timestamp.fromDate(DateTime.tryParse(f.timestamp) ?? DateTime.now()),
+              'status': f.status,
+              'vehicle_number': f.vehicleNumber,
+              'ward': f.ward,
+              'zone': f.zone,
+              'model_version': f.modelVersion ?? MODEL_VERSION,
+            };
           }
         }
+
+        List<Map<String, dynamic>> allFlags = flagsMap.values.toList();
 
         // Sort descending by timestamp
         allFlags.sort((a, b) {
@@ -343,31 +484,47 @@ class _ComndScreenState extends State<ComndScreen> {
           return 0;
         });
 
-        final totalCount = allFlags.length;
-        final activeCount = allFlags.where((f) => f['status'] != 'Deflagged').length;
-        final deflaggedCount = allFlags.where((f) => f['status'] == 'Deflagged').length;
+        // 1. AREA FILTERING FIRST (Zone and Ward filters)
+        var areaFilteredFlags = allFlags;
+        if (_vehicleSelectedZone != 'All Zones') {
+          areaFilteredFlags = areaFilteredFlags.where((f) {
+            final lat = ((f['lat'] ?? 0.0) as num).toDouble();
+            final lng = ((f['lng'] ?? 0.0) as num).toDouble();
+            final z = (f['zone'] ?? '').toString();
+            return WardZoneService.instance.matchesZone(
+              lat: lat,
+              lng: lng,
+              docZone: z,
+              targetZone: _vehicleSelectedZone,
+            );
+          }).toList();
+        }
 
-        // Apply UI Filters
-        var displayedFlags = allFlags;
+        if (_vehicleSelectedWard != 'All Wards') {
+          areaFilteredFlags = areaFilteredFlags.where((f) {
+            final lat = ((f['lat'] ?? 0.0) as num).toDouble();
+            final lng = ((f['lng'] ?? 0.0) as num).toDouble();
+            final w = (f['ward'] ?? '').toString();
+            return WardZoneService.instance.matchesWard(
+              lat: lat,
+              lng: lng,
+              docWard: w,
+              targetWard: _vehicleSelectedWard,
+            );
+          }).toList();
+        }
+
+        // 2. STAT COUNTERS COMPUTED STRICTLY ON THE AREA-FILTERED SPOTS
+        final totalCount = areaFilteredFlags.length;
+        final activeCount = areaFilteredFlags.where((f) => f['status'] != 'Deflagged').length;
+        final deflaggedCount = areaFilteredFlags.where((f) => f['status'] == 'Deflagged').length;
+
+        // 3. Apply Status & Search Filters to the area-filtered spots for the list and map
+        var displayedFlags = areaFilteredFlags;
         if (_vehicleStatusFilter == 'Flagged') {
           displayedFlags = displayedFlags.where((f) => f['status'] != 'Deflagged').toList();
         } else if (_vehicleStatusFilter == 'Deflagged') {
           displayedFlags = displayedFlags.where((f) => f['status'] == 'Deflagged').toList();
-        }
-
-        if (_vehicleSelectedZone != 'All Zones') {
-          displayedFlags = displayedFlags.where((f) {
-            final z = (f['zone'] ?? '').toString().trim().toLowerCase();
-            final target = _vehicleSelectedZone.trim().toLowerCase();
-            return z == target || z.contains(target) || target.contains(z);
-          }).toList();
-        }
-        if (_vehicleSelectedWard != 'All Wards') {
-          displayedFlags = displayedFlags.where((f) {
-            final w = (f['ward'] ?? '').toString().trim().toLowerCase();
-            final target = _vehicleSelectedWard.trim().toLowerCase();
-            return w == target || w.replaceAll(' ', '') == target.replaceAll(' ', '');
-          }).toList();
         }
 
         if (_vehicleSearchQuery.trim().isNotEmpty) {
@@ -383,7 +540,7 @@ class _ComndScreenState extends State<ComndScreen> {
 
         return Column(
           children: [
-            // Stat Cards Banner
+            // Stat Cards Banner - strictly reflects the selected area!
             Padding(
               padding: EdgeInsets.symmetric(horizontal: isMobile ? 12 : 20, vertical: 12),
               child: Row(
@@ -486,7 +643,7 @@ class _ComndScreenState extends State<ComndScreen> {
                       scrollDirection: Axis.horizontal,
                       child: Row(
                         children: [
-                          _buildFilterChip('All Flags (${allFlags.length})', _vehicleStatusFilter == 'All', () {
+                          _buildFilterChip('All Flags (${totalCount})', _vehicleStatusFilter == 'All', () {
                             setState(() => _vehicleStatusFilter = 'All');
                           }),
                           const SizedBox(width: 8),
@@ -507,12 +664,12 @@ class _ComndScreenState extends State<ComndScreen> {
                               border: Border.all(color: const Color(0xFFCBD5E1)),
                             ),
                             child: DropdownButton<String>(
-                              value: _zones.contains(_vehicleSelectedZone) ? _vehicleSelectedZone : 'All Zones',
+                              value: _zones.contains(_vehicleSelectedZone) ? _vehicleSelectedZone : (_zones.isNotEmpty ? _zones.first : 'All Zones'),
                               underline: const SizedBox(),
                               isDense: true,
                               style: const TextStyle(fontSize: 12, color: Color(0xFF334155), fontWeight: FontWeight.w600),
                               items: _zones.map((z) => DropdownMenuItem(value: z, child: Text(z))).toList(),
-                              onChanged: (val) => setState(() => _vehicleSelectedZone = val ?? 'All Zones'),
+                              onChanged: _zones.length <= 1 ? null : _onZoneChanged,
                             ),
                           ),
                           const SizedBox(width: 8),
@@ -525,12 +682,12 @@ class _ComndScreenState extends State<ComndScreen> {
                               border: Border.all(color: const Color(0xFFCBD5E1)),
                             ),
                             child: DropdownButton<String>(
-                              value: _wards.contains(_vehicleSelectedWard) ? _vehicleSelectedWard : 'All Wards',
+                              value: _wards.contains(_vehicleSelectedWard) ? _vehicleSelectedWard : (_wards.isNotEmpty ? _wards.first : 'All Wards'),
                               underline: const SizedBox(),
                               isDense: true,
                               style: const TextStyle(fontSize: 12, color: Color(0xFF334155), fontWeight: FontWeight.w600),
                               items: _wards.map((w) => DropdownMenuItem(value: w, child: Text(w))).toList(),
-                              onChanged: (val) => setState(() => _vehicleSelectedWard = val ?? 'All Wards'),
+                              onChanged: _wards.length <= 1 ? null : _onWardChanged,
                             ),
                           ),
                         ],
@@ -863,15 +1020,15 @@ class _ComndScreenState extends State<ComndScreen> {
                           if (!isDeflagged) ...[
                             ElevatedButton.icon(
                               onPressed: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) => ComndDeflagScreen(
-                                      documentId: id,
-                                      initialVehicleNumber: vehicleNumber,
-                                      initialLocation: '$zone, $ward',
-                                    ),
-                                  ),
+                                ComndDeflagScreen.showDeflagSelectionModal(
+                                  context: context,
+                                  documentId: id,
+                                  initialVehicleNumber: vehicleNumber,
+                                  initialLocation: '$zone, $ward',
+                                  lat: lat,
+                                  lng: lng,
+                                  ward: ward,
+                                  zone: zone,
                                 );
                               },
                               icon: const Icon(LucideIcons.camera, size: 14),
@@ -927,6 +1084,23 @@ class _ComndScreenState extends State<ComndScreen> {
     const double clusterDist = 0.00018;
     final List<List<Map<String, dynamic>>> clusters = [];
 
+    // Draw assigned road routes for live fleet vehicles (never connect distant trash flags directly)
+    List<Polyline> routePolylines = [];
+    for (var entry in _liveVehicles.entries) {
+      final data = entry.value;
+      if (data['assignedRoute'] != null) {
+        final List<dynamic> rawRoute = data['assignedRoute'];
+        final pts = rawRoute.map((e) => LatLng((e['lat'] as num).toDouble(), (e['lng'] as num).toDouble())).toList();
+        if (pts.isNotEmpty) {
+          routePolylines.add(Polyline(
+            points: pts,
+            color: const Color(0xFF3B82F6),
+            strokeWidth: 4.0,
+          ));
+        }
+      }
+    }
+
     for (var f in flags) {
       final lat = ((f['lat'] ?? 0.0) as num).toDouble();
       final lng = ((f['lng'] ?? 0.0) as num).toDouble();
@@ -970,6 +1144,8 @@ class _ComndScreenState extends State<ComndScreen> {
               selectedZone: _vehicleSelectedZone,
               selectedWard: _vehicleSelectedWard,
             ),
+            if (routePolylines.isNotEmpty)
+              PolylineLayer(polylines: routePolylines),
             MarkerLayer(
               markers: clusters.map<Marker>((cluster) {
                 final f = cluster.first;
@@ -1006,6 +1182,53 @@ class _ComndScreenState extends State<ComndScreen> {
                 );
               }).toList(),
             ),
+            // Live fleet vehicle markers on Command Screen
+            if (_liveVehicles.isNotEmpty)
+              MarkerLayer(
+                markers: _liveVehicles.entries.map((entry) {
+                  final data = entry.value;
+                  final lat = (data['lat'] as num).toDouble();
+                  final lng = (data['lng'] as num).toDouble();
+                  final isActive = data['isActive'] as bool? ?? false;
+                  return Marker(
+                    point: LatLng(lat, lng),
+                    width: 90,
+                    height: 55,
+                    alignment: Alignment.center,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1E293B),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: isActive ? const Color(0xFF10B981) : const Color(0xFF3B82F6), width: 1.5),
+                            boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
+                          ),
+                          child: Text(
+                            entry.key,
+                            style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: isActive ? const Color(0xFF10B981) : const Color(0xFF3B82F6),
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 1.5),
+                            boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 4)],
+                          ),
+                          child: const Icon(LucideIcons.truck, color: Colors.white, size: 12),
+                        ),
+                      ],
+                    ),
+                  );
+                }).toList(),
+              ),
           ],
         ),
       ),
@@ -1083,15 +1306,15 @@ class _ComndScreenState extends State<ComndScreen> {
                     child: ElevatedButton.icon(
                       onPressed: () {
                         Navigator.pop(ctx);
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => ComndDeflagScreen(
-                              documentId: flag['id'],
-                              initialVehicleNumber: vehicle,
-                              initialLocation: '${flag['zone'] ?? ''}, ${flag['ward'] ?? ''}',
-                            ),
-                          ),
+                        ComndDeflagScreen.showDeflagSelectionModal(
+                          context: context,
+                          documentId: flag['id'] ?? '',
+                          initialVehicleNumber: vehicle,
+                          initialLocation: '${flag['zone'] ?? ''}, ${flag['ward'] ?? ''}',
+                          lat: lat,
+                          lng: lng,
+                          ward: flag['ward'],
+                          zone: flag['zone'],
                         );
                       },
                       icon: const Icon(LucideIcons.camera, size: 16),
@@ -1168,11 +1391,33 @@ class _ComndScreenState extends State<ComndScreen> {
           ];
         }
 
-        final totalComplaints = userComplaints.length;
-        final pendingComplaints = userComplaints.where((c) => c['status'] != 'Resolved' && c['status'] != 'Deflagged').length;
-        final resolvedComplaints = userComplaints.where((c) => c['status'] == 'Resolved' || c['status'] == 'Deflagged').length;
+        // Filter complaints by RoleService access and selected Zone/Ward
+        List<Map<String, dynamic>> allowedComplaints = userComplaints.where((c) {
+          final lat = ((c['lat'] ?? 0.0) as num).toDouble();
+          final lng = ((c['lng'] ?? 0.0) as num).toDouble();
+          final z = (c['zone'] ?? '').toString();
+          final w = (c['ward'] ?? '').toString();
 
-        var displayedComplaints = userComplaints;
+          if (!RoleService.isSpotAllowed(lat, lng, z, w, 'COM&D')) return false;
+
+          if (_vehicleSelectedZone != 'All Zones' &&
+              !WardZoneService.instance.matchesZone(lat: lat, lng: lng, docZone: z, targetZone: _vehicleSelectedZone)) {
+            return false;
+          }
+
+          if (_vehicleSelectedWard != 'All Wards' &&
+              !WardZoneService.instance.matchesWard(lat: lat, lng: lng, docWard: w, targetWard: _vehicleSelectedWard)) {
+            return false;
+          }
+
+          return true;
+        }).toList();
+
+        final totalComplaints = allowedComplaints.length;
+        final pendingComplaints = allowedComplaints.where((c) => c['status'] != 'Resolved' && c['status'] != 'Deflagged').length;
+        final resolvedComplaints = allowedComplaints.where((c) => c['status'] == 'Resolved' || c['status'] == 'Deflagged').length;
+
+        var displayedComplaints = allowedComplaints;
         if (_complaintStatusFilter == 'In Progress') {
           displayedComplaints = displayedComplaints.where((c) => c['status'] != 'Resolved' && c['status'] != 'Deflagged').toList();
         } else if (_complaintStatusFilter == 'Resolved') {

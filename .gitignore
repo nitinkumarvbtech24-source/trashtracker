@@ -32,11 +32,17 @@ ENV/
 # *.pt
 # *.pth
 captured_images/
+**/captured_images/
 dataset/
+**/dataset/
+dataset_split/
+**/dataset_split/
 *.csv
 *.zip
 snapshots/
 runs/
+**/snapshots/
+**/runs/
 Garbage_ai_model_v6/snapshots/
 Garbage_ai_model_v6/runs/
 Garbage_ai_model_v6/weights/
@@ -49,6 +55,26 @@ Garbage_ai_model_v7/*.pt
 Garbage_ai_model_v7/*.onnx
 Garbage_ai_model_v7/*.zip
 Garbage_ai_model_v7/scripts/*.pt
+Garbage_ai_mobilenetv3/snapshots/
+Garbage_ai_mobilenetv3/runs/
+Garbage_ai_mobilenetv3/weights/
+Garbage_ai_mobilenetv3/*.pt
+Garbage_ai_mobilenetv3/*.onnx
+Garbage_ai_mobilenetv3/*.zip
+Garbage_ai_mobilenetv3/dataset_split/
+
+# Images
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.gif
+*.bmp
+*.tiff
+*.JPG
+*.JPEG
+*.PNG
+*.WEBP
 
 # Flutter/Dart
 .dart_tool/

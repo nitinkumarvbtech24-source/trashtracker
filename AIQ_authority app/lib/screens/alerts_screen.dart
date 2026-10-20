@@ -7,6 +7,7 @@ import '../models/vehicle.dart';
 import '../widgets/ngrok_image.dart';
 import 'cleanliness_screen.dart';
 import '../models/garbage_flag.dart';
+import '../services/role_service.dart';
 
 class AlertsListScreen extends StatefulWidget {
   const AlertsListScreen({super.key});
@@ -39,7 +40,8 @@ class _AlertsListScreenState extends State<AlertsListScreen> {
       if (!mounted) return;
       final flags = snapshot.docs
           .map((doc) => GarbageFlag.fromJson(doc.data(), doc.id))
-          .where((f) => f.status != 'Resolved' && f.status != 'Deflagged' && f.matchesModelVersion(MODEL_VERSION) && (f.className == 'Trash_Detected' || f.displayClass == 'Trash Detected'))
+          .where((f) => f.isTrashDetected)
+          .where((f) => RoleService.isSpotAllowed(f.lat, f.lng, f.zone, f.ward, 'Street Cleanliness AI'))
           .toList();
 
       Map<String, GarbageFlag> latest = {};
@@ -207,6 +209,7 @@ class _AlertChatScreenState extends State<AlertChatScreen> {
       if (!mounted) return;
       final flags = snapshot.docs
           .map((doc) => GarbageFlag.fromJson(doc.data(), doc.id))
+          .where((f) => f.isTrashDetected)
           .toList();
       
       flags.sort((a, b) => a.timestamp.compareTo(b.timestamp));
@@ -260,6 +263,7 @@ class _AlertChatScreenState extends State<AlertChatScreen> {
 
   Widget _buildChatBubble(GarbageFlag flag) {
     final isClean = flag.className == 'Clean';
+    final isVeryDirty = flag.displayClass.contains('Very Dirty') || flag.className.contains('Very_Dirty');
     
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
@@ -306,15 +310,19 @@ class _AlertChatScreenState extends State<AlertChatScreen> {
                       Row(
                         children: [
                           Icon(
-                            isClean ? LucideIcons.checkCircle : LucideIcons.alertTriangle,
-                            color: isClean ? Colors.greenAccent : Colors.redAccent,
+                            isClean
+                                ? LucideIcons.checkCircle
+                                : (isVeryDirty ? LucideIcons.alertOctagon : LucideIcons.alertTriangle),
+                            color: isClean
+                                ? Colors.greenAccent
+                                : (isVeryDirty ? Colors.redAccent : Colors.orangeAccent),
                             size: 16,
                           ),
                           const SizedBox(width: 8),
                           Text(
                             flag.displayClass,
-                            style: const TextStyle(
-                              color: Colors.white,
+                            style: TextStyle(
+                              color: isVeryDirty ? Colors.redAccent : Colors.white,
                               fontSize: 14,
                               fontWeight: FontWeight.bold,
                             ),
