@@ -4,8 +4,9 @@ import 'package:lucide_icons/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/role_service.dart';
 import 'comnd_deflag_screen.dart';
-import '../constants.dart';
 import '../models/garbage_flag.dart';
+import '../widgets/trash_flag_inspection_modal.dart';
+import '../services/authority_directory_service.dart';
 
 class ComndListScreen extends StatefulWidget {
   const ComndListScreen({super.key});
@@ -86,7 +87,8 @@ class _ComndListScreenState extends State<ComndListScreen> {
             itemBuilder: (context, index) {
               final doc = filteredDocs[index];
               final data = doc.data() as Map<String, dynamic>;
-              final imageUrl = data['image_url'] ?? '';
+              final rawImageUrl = data['image_url'] ?? '';
+              final imageUrl = AuthorityDirectoryService.instance.resolveImageUrl(rawImageUrl, doc.id);
               final lat = (data['lat'] ?? 0.0).toDouble();
               final lng = (data['lng'] ?? 0.0).toDouble();
               final status = data['status'] ?? 'Flagged';
@@ -95,6 +97,24 @@ class _ComndListScreenState extends State<ComndListScreen> {
               final timestamp = data['timestamp'] as Timestamp?;
               final dateStr = timestamp != null ? DateTime.fromMillisecondsSinceEpoch(timestamp.millisecondsSinceEpoch).toString().split('.')[0] : 'Unknown Time';
 
+              void openInspectionModal() {
+                TrashFlagInspectionModal.showFromMap(
+                  context,
+                  {...data, 'id': doc.id, 'image_url': imageUrl},
+                  onDeflag: () {
+                    ComndDeflagScreen.showDeflagSelectionModal(
+                      context: context,
+                      documentId: doc.id,
+                      initialLocation: '$zone - $ward',
+                      lat: lat,
+                      lng: lng,
+                      ward: ward,
+                      zone: zone,
+                    );
+                  },
+                );
+              }
+
               return Card(
                 margin: const EdgeInsets.only(bottom: 16),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -102,20 +122,24 @@ class _ComndListScreenState extends State<ComndListScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    if (imageUrl.isNotEmpty)
-                      ClipRRect(
+                    GestureDetector(
+                      onTap: openInspectionModal,
+                      child: ClipRRect(
                         borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
                         child: Image.network(
                           imageUrl,
+                          headers: const {"ngrok-skip-browser-warning": "true"},
                           height: 200,
                           fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => Container(
+                          errorBuilder: (_, __, ___) => Image.network(
+                            AuthorityDirectoryService.instance.getFallbackTrashImageUrl(doc.id.hashCode),
+                            headers: const {"ngrok-skip-browser-warning": "true"},
                             height: 200,
-                            color: Colors.grey[200],
-                            child: const Icon(Icons.broken_image, color: Colors.grey, size: 50),
+                            fit: BoxFit.cover,
                           ),
                         ),
                       ),
+                    ),
                     Padding(
                       padding: const EdgeInsets.all(16.0),
                       child: Column(
@@ -124,9 +148,12 @@ class _ComndListScreenState extends State<ComndListScreen> {
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text(
-                                '$zone - $ward',
-                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                              InkWell(
+                                onTap: openInspectionModal,
+                                child: Text(
+                                  '$zone - $ward',
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                                ),
                               ),
                               Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),

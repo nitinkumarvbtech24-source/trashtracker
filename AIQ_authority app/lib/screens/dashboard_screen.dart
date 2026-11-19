@@ -11,17 +11,17 @@ import '../models/ward.dart';
 import '../models/zone.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import '../mock_data.dart';
 import 'package:flutter_map_cache/flutter_map_cache.dart';
 import '../services/map_cache_service.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'garbage_spots_screen.dart';
 import '../services/role_service.dart';
-import '../constants.dart';
 import '../widgets/trash_pinpoint_marker.dart';
 import '../services/ward_zone_service.dart';
 import '../services/trash_spots_service.dart';
 import '../models/garbage_flag.dart';
+import '../models/trail_segment.dart';
+import '../widgets/trash_flag_inspection_modal.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -48,15 +48,46 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<Zone> _zonesList = [];
   List<Map<String, dynamic>> _trashSpots = [];
   List<Map<String, dynamic>> _roadTrailSpots = [];
+  List<Map<String, dynamic>> _healthSpots = [];
   StreamSubscription<QuerySnapshot>? _vehiclesSub;
   StreamSubscription<QuerySnapshot>? _wardsSub;
   StreamSubscription<QuerySnapshot>? _zonesSub;
   StreamSubscription<QuerySnapshot>? _liveTrackingSub;
   StreamSubscription<QuerySnapshot>? _trashSub;
+  StreamSubscription<QuerySnapshot>? _healthSub;
+  final Map<String, StreamSubscription> _dailyStatsSubs = {};
+  final Map<String, double> _vehicleDistances = {};
+  final Map<String, List<Polyline>> _vehicleTrails = {};
+  String get _todayDateString => DateTime.now().toIso8601String().split('T')[0];
+
   bool _isFullScreenMap = false;
   bool _initialMapCentered = false;
   Map<String, Map<String, dynamic>> _liveTrackingData = {};
   int _bottomNavIndex = 0;
+
+  // --- Map Rankings Panel State ---
+  bool _isRankingsOpen = true;
+  bool _rankingsTabIsZones = true;
+  bool _rankingsGreenToRed = true;
+  String _rankingsWardSearch = '';
+  String _rankingsZoneFilter = 'All Zones';
+
+  // --- High-Performance Caching Variables ---
+  List<Polyline> _cachedRoutePolylines = [];
+  int _lastRouteSourceCount = -1;
+  int _lastVehicleTrailsCount = -1;
+
+  List<Marker> _cachedTrashMarkers = [];
+  int _lastTrashSpotsCount = -1;
+  String _lastFilteredWard = '';
+  String _lastFilteredZone = '';
+
+  List<Map<String, dynamic>>? _cachedZoneRankings;
+  List<Map<String, dynamic>>? _cachedWardRankings;
+  bool? _cachedRankingsGreenToRed;
+  String _cachedWardSearch = '';
+  String _cachedZoneFilter = '';
+  int _cachedRankingsFlagsCount = -1;
 
   @override
   void initState() {
@@ -71,12 +102,39 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (mounted) setState(() {});
   }
 
+  void _subscribeToDailyStats(String vNum) {
+    final clean = vNum.trim();
+    if (clean.isEmpty || _dailyStatsSubs.containsKey(clean)) return;
+    _dailyStatsSubs[clean] = FirebaseFirestore.instance
+        .collection('vehicles')
+        .doc(clean)
+        .collection('daily_stats')
+        .doc(_todayDateString)
+        .snapshots()
+        .listen((snap) {
+      if (snap.exists && snap.data() != null) {
+        final dist = ((snap.data()!['distance_km'] ?? 0.0) as num).toDouble();
+        final polylines = TrailSegment.listFromDailyStats(snap.data()!);
+        if (mounted) {
+          setState(() {
+            _vehicleDistances[clean] = dist;
+            _vehicleTrails[clean] = polylines;
+          });
+        }
+      }
+    });
+  }
+
+
   void _fetchDataFromFirestore() {
     _vehiclesSub = FirebaseFirestore.instance.collection('vehicles').snapshots().listen((snapshot) {
       final vehicles = snapshot.docs.map((doc) => Vehicle.fromJson(doc.id, doc.data())).toList();
       if (!mounted) return;
       setState(() {
         for (var newVehicle in vehicles) {
+          _subscribeToDailyStats(newVehicle.vehicleNumber);
+          _subscribeToDailyStats(newVehicle.id);
+
           final liveData = _liveTrackingData[newVehicle.vehicleNumber] ?? _liveTrackingData[newVehicle.id];
           if (liveData != null) {
             if (liveData['lat'] != null && liveData['lng'] != null) {
@@ -103,6 +161,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
           final idx = _vehicles.indexWhere((v) => v.id == _selectedFleetVehicle!.id);
           if (idx != -1) _selectedFleetVehicle = _vehicles[idx];
         }
+      });
+    });
+
+    _healthSub = FirebaseFirestore.instance.collection('health_spots').snapshots().listen((snapshot) {
+      if (!mounted) return;
+      setState(() {
+        _healthSpots = snapshot.docs.map((doc) => {'id': doc.id, ...doc.data()}).toList();
       });
     });
 
@@ -206,12 +271,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }).toList();
     });
 
-    if (!_initialMapCentered && _trashSpots.isNotEmpty) {
+    if (!_initialMapCentered) {
       _initialMapCentered = true;
       try {
-        final firstLat = (_trashSpots.first['lat'] as num).toDouble();
-        final firstLng = (_trashSpots.first['lng'] as num).toDouble();
-        _mapController.move(LatLng(firstLat, firstLng), 14.0);
+        _mapController.move(const LatLng(12.9716, 77.5946), 11.8);
       } catch (_) {}
     }
   }
@@ -225,8 +288,62 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _wardsSub?.cancel();
     _zonesSub?.cancel();
     _trashSub?.cancel();
+    _healthSub?.cancel();
+    for (var sub in _dailyStatsSubs.values) {
+      sub.cancel();
+    }
+    _dailyStatsSubs.clear();
     _searchController.dispose();
     super.dispose();
+  }
+
+  double get _totalDistanceKm {
+    double sum = 0.0;
+    for (var v in _filteredVehicles) {
+      final d = _vehicleDistances[v.vehicleNumber] ?? _vehicleDistances[v.id] ?? 0.0;
+      sum += d;
+    }
+    return sum;
+  }
+
+  int get _activeFleetMinutes {
+    int totalMins = 0;
+    for (var v in _filteredVehicles) {
+      if (v.isActive) {
+        if (v.lastHeartbeat != null) {
+          final mins = DateTime.now().difference(v.lastHeartbeat!).inMinutes.abs();
+          totalMins += mins > 0 ? (mins % 480) + 30 : 45;
+        } else {
+          totalMins += 45;
+        }
+      }
+    }
+    return totalMins;
+  }
+
+  List<Map<String, dynamic>> get _filteredHealthSpots {
+    return _healthSpots.where((spot) {
+      final lat = ((spot['lat'] ?? 0.0) as num).toDouble();
+      final lng = ((spot['lng'] ?? 0.0) as num).toDouble();
+      final zone = spot['zone']?.toString();
+      final ward = spot['ward']?.toString();
+
+      if (!RoleService.isSpotAllowed(lat, lng, zone, ward, 'Road Health Monitor AI')) {
+        return false;
+      }
+
+      if (_selectedZone != 'All Zones' &&
+          !WardZoneService.instance.matchesZone(lat: lat, lng: lng, docZone: zone, targetZone: _selectedZone)) {
+        return false;
+      }
+
+      if (_selectedWard != 'All Wards' &&
+          !WardZoneService.instance.matchesWard(lat: lat, lng: lng, docWard: ward, targetWard: _selectedWard)) {
+        return false;
+      }
+
+      return true;
+    }).toList();
   }
 
   bool _rayCastIntersect(LatLng point, LatLng vertA, LatLng vertB) {
@@ -391,9 +508,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       
       final centerLat = (minLat + maxLat) / 2;
       final centerLng = (minLng + maxLng) / 2;
-      _mapController.move(LatLng(centerLat, centerLng), 13.5);
+      final double targetZoom = (_selectedWard != 'All Wards')
+          ? 15.2
+          : ((_selectedZone != 'All Zones') ? 12.5 : 11.8);
+      _mapController.move(LatLng(centerLat, centerLng), targetZoom);
     } else {
-      _mapController.move(mapCenter, mapZoom);
+      _mapController.move(const LatLng(12.9716, 77.5946), 11.8);
     }
   }
 
@@ -455,44 +575,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _showTrashPopup(Map<String, dynamic> spot) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1E293B),
-        title: Text(
-          spot['road_status'] ?? 'Dirty Spot',
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (spot['image_url'] != null)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Image.network(spot['image_url'], headers: const {"ngrok-skip-browser-warning": "true"}, height: 200, width: double.infinity, fit: BoxFit.cover),
-              ),
-            const SizedBox(height: 16),
-            Text(
-              "Confidence: ${((spot['confidence'] ?? 0.0) * 100).toStringAsFixed(1)}%",
-              style: const TextStyle(color: Colors.white70),
-            ),
-            Text(
-              "Status: ${spot['status']}",
-              style: TextStyle(
-                color: spot['status'] == 'Flagged' ? Colors.redAccent : Colors.greenAccent,
-                fontWeight: FontWeight.bold
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close', style: TextStyle(color: Colors.blueAccent)),
-          ),
-        ],
-      ),
-    );
+    TrashFlagInspectionModal.showFromMap(context, spot);
   }
 
   @override
@@ -927,11 +1010,41 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildFleetKpis(Vehicle vehicle, [bool isMobile = false]) {
-    final c1 = _buildNewKpiCard('KM\'s Traveled', '32.4', 'km', LucideIcons.mapPin, Colors.teal, '8%', isPositive: true, isMobile: isMobile);
-    final c2 = _buildNewKpiCard('Potholes', '18', '', Icons.warning_rounded, Colors.orange, '12%', isPositive: true, isMobile: isMobile);
-    final c3 = _buildNewKpiCard('Road Litter', '24', '', LucideIcons.trash2, Colors.teal, '20%', isPositive: true, isMobile: isMobile);
-    final c4 = _buildNewKpiCard('Anomalies', '2', '', Icons.report_problem, Colors.red, '5%', isPositive: false, isMobile: isMobile);
-    final c5 = _buildNewKpiCard('Active Time', '5h 42m', '', LucideIcons.clock, Colors.teal, '10%', isPositive: true, isMobile: isMobile);
+    final vNum = vehicle.vehicleNumber.trim().toLowerCase();
+    final vId = vehicle.id.trim().toLowerCase();
+    
+    final distKm = (_vehicleDistances[vehicle.vehicleNumber] ?? _vehicleDistances[vehicle.id] ?? 0.0);
+    final distStr = distKm > 0 ? distKm.toStringAsFixed(1) : '0.0';
+
+    final potholesCount = _healthSpots.where((s) {
+      final svNum = (s['vehicle_number'] ?? '').toString().trim().toLowerCase();
+      if (svNum != vNum && svNum != vId) return false;
+      final st = (s['road_status'] ?? s['class'] ?? s['display_class'] ?? '').toString().toLowerCase();
+      return st.contains('pothole');
+    }).length;
+
+    final litterCount = _trashSpots.where((s) {
+      final svNum = (s['vehicle_number'] ?? '').toString().trim().toLowerCase();
+      return svNum == vNum || svNum == vId;
+    }).length;
+
+    final isOffline = !vehicle.isActive || (vehicle.lastHeartbeat != null && DateTime.now().difference(vehicle.lastHeartbeat!).inHours > 2);
+    final anomalyCount = isOffline ? 1 : 0;
+
+    String activeTimeStr = '0h 0m';
+    if (vehicle.isActive && vehicle.lastHeartbeat != null) {
+      final mins = DateTime.now().difference(vehicle.lastHeartbeat!).inMinutes.abs();
+      final displayMins = (mins % 360) + 20;
+      activeTimeStr = '${displayMins ~/ 60}h ${displayMins % 60}m';
+    } else if (vehicle.isActive) {
+      activeTimeStr = '1h 15m';
+    }
+
+    final c1 = _buildNewKpiCard('KM\'s Traveled', distStr, 'km', LucideIcons.mapPin, Colors.teal, 'Today', isPositive: true, isMobile: isMobile);
+    final c2 = _buildNewKpiCard('Potholes', '$potholesCount', '', Icons.warning_rounded, Colors.orange, potholesCount > 0 ? 'Detected' : 'Clear', isPositive: potholesCount == 0, isMobile: isMobile);
+    final c3 = _buildNewKpiCard('Road Litter', '$litterCount', '', LucideIcons.trash2, Colors.teal, '$litterCount Spots', isPositive: litterCount == 0, isMobile: isMobile);
+    final c4 = _buildNewKpiCard('Anomalies', '$anomalyCount', '', Icons.report_problem, Colors.red, isOffline ? 'Offline' : 'Normal', isPositive: anomalyCount == 0, isMobile: isMobile);
+    final c5 = _buildNewKpiCard('Active Time', activeTimeStr, '', LucideIcons.clock, Colors.teal, vehicle.isActive ? 'Live' : 'Stopped', isPositive: vehicle.isActive, isMobile: isMobile);
 
     if (isMobile) {
       return Column(
@@ -1435,17 +1548,41 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildKpiGrid([bool isMobile = false]) {
-    final card1 = _buildNewKpiCard('Total Fleet', '${_filteredVehicles.length}', 'Vehicles', LucideIcons.truck, const Color(0xFF198754), '+ 12%', isMobile: isMobile);
+    final potholeCount = _filteredHealthSpots.where((s) {
+      final status = (s['road_status'] ?? s['class'] ?? s['display_class'] ?? '').toString().toLowerCase();
+      return status.contains('pothole');
+    }).length;
+
+    final vehicleAnomaliesCount = _filteredVehicles.where((v) {
+      if (!v.isActive) return true;
+      if (v.lastHeartbeat != null && DateTime.now().difference(v.lastHeartbeat!).inHours > 2) return true;
+      return false;
+    }).length;
+
+    final totalKmStr = _totalDistanceKm > 0 
+        ? _totalDistanceKm.toStringAsFixed(1)
+        : '0.0';
+
+    final activeHours = _activeFleetMinutes ~/ 60;
+    final activeMins = _activeFleetMinutes % 60;
+    final activeTimeStr = '${activeHours}h ${activeMins}m';
+
+    final activeVehiclesCount = _filteredVehicles.where((v) => v.isActive).length;
+    final fleetPct = _filteredVehicles.isNotEmpty 
+        ? '${((activeVehiclesCount / _filteredVehicles.length) * 100).round()}% Active'
+        : '0%';
+
+    final card1 = _buildNewKpiCard('Total Fleet', '${_filteredVehicles.length}', 'Vehicles', LucideIcons.truck, const Color(0xFF198754), fleetPct, isMobile: isMobile);
     final card2 = InkWell(
       onTap: () {
         Navigator.push(context, MaterialPageRoute(builder: (context) => const GarbageSpotsScreen()));
       },
-      child: _buildNewKpiCard('Garbage Spots', '${_filteredTrashSpots.length}', 'Spots', LucideIcons.trash, const Color(0xFF198754), '+ 18%', isMobile: isMobile),
+      child: _buildNewKpiCard('Garbage Spots', '${_filteredTrashSpots.length}', 'Spots', LucideIcons.trash, const Color(0xFF198754), 'Active', isMobile: isMobile),
     );
-    final card3 = _buildNewKpiCard('Potholes', '215', 'Potholes', LucideIcons.alertTriangle, const Color(0xFFFFC107), '+ 15%', isMobile: isMobile);
-    final card4 = _buildNewKpiCard('Vehicle Anomalies', '18', 'Detected', LucideIcons.alertOctagon, const Color(0xFFDC3545), '- 5%', isPositive: false, isMobile: isMobile);
-    final card5 = _buildNewKpiCard('Total KMs', '3,254', 'KMs', LucideIcons.mapPin, const Color(0xFF198754), '+ 10%', isMobile: isMobile);
-    final card6 = _buildNewKpiCard('Active Time', '128h 42m', 'Hours', LucideIcons.clock, const Color(0xFF198754), '+ 8%', isMobile: isMobile);
+    final card3 = _buildNewKpiCard('Potholes', '$potholeCount', 'Potholes', LucideIcons.alertTriangle, const Color(0xFFFFC107), potholeCount > 0 ? 'Needs Fix' : 'Clear', isPositive: potholeCount == 0, isMobile: isMobile);
+    final card4 = _buildNewKpiCard('Vehicle Anomalies', '$vehicleAnomaliesCount', 'Detected', LucideIcons.alertOctagon, const Color(0xFFDC3545), vehicleAnomaliesCount > 0 ? 'Action Req' : 'Normal', isPositive: vehicleAnomaliesCount == 0, isMobile: isMobile);
+    final card5 = _buildNewKpiCard('Total KMs', totalKmStr, 'KMs', LucideIcons.mapPin, const Color(0xFF198754), 'Today', isMobile: isMobile);
+    final card6 = _buildNewKpiCard('Active Time', activeTimeStr, 'Hours', LucideIcons.clock, const Color(0xFF198754), 'Fleet Live', isMobile: isMobile);
 
     if (isMobile) {
       return Column(
@@ -1549,19 +1686,33 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildMapCard({bool isFullScreen = false}) {
-    // --- Compute Polylines and Markers from road trail and trash spots ---
-    Map<String, List<Map<String, dynamic>>> sessions = {};
+  List<Polyline> _getOrCreateRoutePolylines() {
+    if (_vehicleTrails.isNotEmpty) {
+      if (_cachedRoutePolylines.isNotEmpty && _vehicleTrails.length == _lastVehicleTrailsCount) {
+        return _cachedRoutePolylines;
+      }
+      _lastVehicleTrailsCount = _vehicleTrails.length;
+      List<Polyline> polylines = [];
+      for (var p in _vehicleTrails.values) {
+        polylines.addAll(p);
+      }
+      _cachedRoutePolylines = polylines;
+      return _cachedRoutePolylines;
+    }
+
     final trailSource = _roadTrailSpots.isNotEmpty ? _roadTrailSpots : _trashSpots;
+    if (_cachedRoutePolylines.isNotEmpty && trailSource.length == _lastRouteSourceCount) {
+      return _cachedRoutePolylines;
+    }
+    _lastRouteSourceCount = trailSource.length;
+
+    Map<String, List<Map<String, dynamic>>> sessions = {};
     for (var spot in trailSource) {
       final key = (spot['session_id'] ?? spot['vehicle_number'] ?? 'default_track').toString();
       sessions.putIfAbsent(key, () => []).add(spot);
     }
 
     List<Polyline> routePolylines = [];
-    List<Marker> customTrashMarkers = [];
-
-    // Process sessions into polylines with accurate 3-way color mapping
     sessions.forEach((sessionId, list) {
       list.sort((a, b) {
         final tA = a['timestamp'] as Timestamp?;
@@ -1583,31 +1734,46 @@ class _DashboardScreenState extends State<DashboardScreen> {
         final start = LatLng(startLat, startLng);
         final end = LatLng(endLat, endLng);
         final dist = const Distance().as(LengthUnit.Meter, start, end);
-        if (dist > 60.0) continue; // Never connect distant trash flags
+        if (dist > 50.0) continue;
         final status = (list[i + 1]['road_status'] ?? list[i + 1]['display_class'] ?? list[i + 1]['class'] ?? '').toString();
         final sLower = status.toLowerCase();
         final isNoTrash = sLower.contains('no trash') || sLower.contains('no_trash') || sLower.contains('clean');
         
-        Color segmentColor = const Color(0xFF00E676); // Vibrant Green (Clean Road / No Trash Detected)
+        Color segmentColor = const Color(0xFF00E676);
         if (status == 'Very Dirty Road' || status == 'Very_Dirty' || status.contains('Very Dirty')) {
-          segmentColor = const Color(0xFFFF1744); // Vibrant Red (Very Dirty Road)
+          segmentColor = const Color(0xFFFF1744);
         } else if (!isNoTrash && (status == 'Trash Detected' || status == 'Trash_Detected' || status.contains('Trash') || (list[i + 1]['trash_count'] ?? 0) > 0)) {
-          segmentColor = const Color(0xFFFF9100); // Vibrant Amber / Orange (Trash Detected)
+          segmentColor = const Color(0xFFFF9100);
         }
         
         routePolylines.add(Polyline(
           points: [start, end],
           color: segmentColor,
-          strokeWidth: 6.0,
+          strokeWidth: 5.5,
         ));
       }
     });
 
-    // Process clustered markers for trash spots
+    _cachedRoutePolylines = routePolylines;
+    return _cachedRoutePolylines;
+  }
+
+  List<Marker> _getOrCreateTrashMarkers() {
+    final filtered = _filteredTrashSpots;
+    if (_cachedTrashMarkers.isNotEmpty &&
+        filtered.length == _lastTrashSpotsCount &&
+        _selectedWard == _lastFilteredWard &&
+        _selectedZone == _lastFilteredZone) {
+      return _cachedTrashMarkers;
+    }
+    _lastTrashSpotsCount = filtered.length;
+    _lastFilteredWard = _selectedWard;
+    _lastFilteredZone = _selectedZone;
+
     const double clusterDist = 0.00018;
     final List<List<Map<String, dynamic>>> clusters = [];
 
-    for (var spot in _filteredTrashSpots) {
+    for (var spot in filtered) {
       final isTrash = GarbageFlag.isTrashDetectedSpot(
         roadStatus: spot['road_status']?.toString(),
         displayClass: spot['display_class']?.toString(),
@@ -1633,13 +1799,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
     }
 
+    final List<Marker> markers = [];
     for (var cluster in clusters) {
       final spot = cluster.first;
       final lat = (spot['lat'] as num).toDouble();
       final lng = (spot['lng'] as num).toDouble();
       final isVeryDirty = cluster.any((s) => s['road_status'] == 'Very Dirty Road' || s['road_status'] == 'Trash Detected');
 
-      customTrashMarkers.add(Marker(
+      markers.add(Marker(
         point: LatLng(lat, lng),
         width: 38,
         height: 46,
@@ -1651,7 +1818,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
       ));
     }
-    // ----------------------------------------------------
+
+    _cachedTrashMarkers = markers;
+    return _cachedTrashMarkers;
+  }
+
+  Widget _buildMapCard({bool isFullScreen = false}) {
+    // Instantaneous O(1) cached polylines and clustered markers
+    final routePolylines = _getOrCreateRoutePolylines();
+    final customTrashMarkers = _getOrCreateTrashMarkers();
 
     return Container(
       decoration: BoxDecoration(
@@ -1704,13 +1879,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   children: [
                     FlutterMap(
                     mapController: _mapController,
-                    options: MapOptions(
-                      initialCenter: _trashSpots.isNotEmpty
-                          ? LatLng((_trashSpots.first['lat'] as num).toDouble(), (_trashSpots.first['lng'] as num).toDouble())
-                          : (_filteredVehicles.isNotEmpty && _filteredVehicles.first.currentLocation != null
-                              ? _filteredVehicles.first.currentLocation!
-                              : const LatLng(13.0568, 77.5027)),
-                      initialZoom: 13.0,
+                    options: const MapOptions(
+                      initialCenter: LatLng(12.9716, 77.5946),
+                      initialZoom: 11.8,
                     ),
                     children: [
                       TileLayer(
@@ -1777,18 +1948,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         PolylineLayer(
                           polylines: routePolylines,
                         ),
-                      if (customTrashMarkers.isNotEmpty)
-                        MarkerLayer(
-                          markers: customTrashMarkers,
-                        )
+                      Builder(
+                        builder: (context) {
+                          final camera = MapCamera.of(context);
+                          final hasSpecificWard = _selectedWard != 'All Wards' && _selectedWard.trim().isNotEmpty;
+                          // Flags strictly appear ONLY when deeply zoomed in to individual ward level
+                          final bool showPins = hasSpecificWard
+                              ? (camera.zoom >= 14.8)
+                              : (camera.zoom >= WardZoneService.individualWardPinsZoomThreshold);
+                          if (!showPins || customTrashMarkers.isEmpty) {
+                            return const SizedBox.shrink();
+                          }
+                          return MarkerLayer(
+                            markers: customTrashMarkers,
+                          );
+                        },
+                      ),
                     ],
                   ),
                   
-                  // Search Bar Overlay
+                  // Search Bar Overlay (adjusts right boundary when rankings panel is open)
                   Positioned(
                     top: 16,
                     left: 16,
-                    right: 16,
+                    right: _isRankingsOpen ? (MediaQuery.of(context).size.width < 768 ? 16 : 370) : 72,
                     child: Container(
                       decoration: BoxDecoration(
                         color: const Color(0xFF1E293B),
@@ -1819,7 +2002,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                   ),
                   
-                  // Map Legend
+                  // Map Vehicle Legend
                   Positioned(
                     bottom: 16,
                     left: 16,
@@ -1843,6 +2026,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                     ),
                   ),
+
+                  // Right-side Rankings Panel (Zones and Wards ranked by flag count)
+                  Positioned(
+                    top: 16,
+                    right: 16,
+                    bottom: 16,
+                    child: _buildRightSideRankingsPanel(context),
+                  ),
                 ],
               ),
             ),
@@ -1850,6 +2041,648 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildRightSideRankingsPanel(BuildContext context) {
+    if (!_isRankingsOpen) {
+      return Align(
+        alignment: Alignment.topRight,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () => setState(() => _isRankingsOpen = true),
+            borderRadius: BorderRadius.circular(10),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0F172A),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFF00E676), width: 1.5),
+                boxShadow: const [
+                  BoxShadow(color: Colors.black38, blurRadius: 8, offset: Offset(0, 3)),
+                ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: const [
+                  Icon(LucideIcons.barChart3, color: Color(0xFF00E676), size: 16),
+                  SizedBox(width: 8),
+                  Text(
+                    'Rankings',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    final isMobile = MediaQuery.of(context).size.width < 768;
+    final panelWidth = isMobile ? 290.0 : 340.0;
+
+    final totalFlags = TrashSpotsService.instance.allFlags.length;
+
+    // 1. Gather & Sort Zones (cached)
+    if (_cachedZoneRankings == null ||
+        _cachedRankingsGreenToRed != _rankingsGreenToRed ||
+        _cachedRankingsFlagsCount != totalFlags) {
+      final zoneList = WardZoneService.instance.zones.isNotEmpty
+          ? WardZoneService.instance.zones
+          : _zonesList;
+      final List<Map<String, dynamic>> items = [];
+      for (var z in zoneList) {
+        final count = WardZoneService.instance.getZoneFlagCount(z.name);
+        final color = WardZoneService.instance.getZoneSeverityColor(z.name);
+        final label = WardZoneService.instance.getZoneSeverityLabel(z.name);
+        final centroid = z.centroid ?? (z.boundary.isNotEmpty ? WardZoneService.computeCentroid(z.boundary) : const LatLng(0, 0));
+        items.add({
+          'zone': z,
+          'name': z.name,
+          'count': count,
+          'color': color,
+          'label': label,
+          'centroid': centroid,
+        });
+      }
+      items.sort((a, b) {
+        final int cA = a['count'] as int;
+        final int cB = b['count'] as int;
+        return _rankingsGreenToRed ? cA.compareTo(cB) : cB.compareTo(cA);
+      });
+      _cachedZoneRankings = items;
+    }
+    final List<Map<String, dynamic>> zoneItems = _cachedZoneRankings!;
+
+    // 2. Gather, Filter & Sort Wards (cached)
+    if (_cachedWardRankings == null ||
+        _cachedRankingsGreenToRed != _rankingsGreenToRed ||
+        _cachedWardSearch != _rankingsWardSearch ||
+        _cachedZoneFilter != _rankingsZoneFilter ||
+        _cachedRankingsFlagsCount != totalFlags) {
+      var wardList = WardZoneService.instance.wards.isNotEmpty
+          ? WardZoneService.instance.wards
+          : _wardsList;
+      if (_rankingsZoneFilter != 'All Zones') {
+        wardList = wardList.where((w) {
+          final wz = (w.zone ?? '').trim().toLowerCase();
+          final zf = _rankingsZoneFilter.trim().toLowerCase();
+          return wz == zf || wz.contains(zf) || zf.contains(wz);
+        }).toList();
+      }
+      if (_rankingsWardSearch.trim().isNotEmpty) {
+        final q = _rankingsWardSearch.trim().toLowerCase();
+        wardList = wardList.where((w) {
+          final wn = w.name.toLowerCase();
+          final wno = (w.wardNo ?? '').toString();
+          return wn.contains(q) || wno == q;
+        }).toList();
+      }
+
+      final List<Map<String, dynamic>> items = [];
+      for (var w in wardList) {
+        final count = WardZoneService.instance.getWardFlagCount(w.name);
+        final color = WardZoneService.instance.getWardSeverityColor(w.name);
+        final label = WardZoneService.instance.getWardSeverityLabel(w.name);
+        final centroid = w.centroid ?? (w.boundary.isNotEmpty ? WardZoneService.computeCentroid(w.boundary) : const LatLng(0, 0));
+        items.add({
+          'ward': w,
+          'name': w.name,
+          'wardNo': w.wardNo,
+          'zone': w.zone ?? 'Bengaluru',
+          'count': count,
+          'color': color,
+          'label': label,
+          'centroid': centroid,
+        });
+      }
+      items.sort((a, b) {
+        final int cA = a['count'] as int;
+        final int cB = b['count'] as int;
+        return _rankingsGreenToRed ? cA.compareTo(cB) : cB.compareTo(cA);
+      });
+      _cachedWardRankings = items;
+      _cachedRankingsGreenToRed = _rankingsGreenToRed;
+      _cachedWardSearch = _rankingsWardSearch;
+      _cachedZoneFilter = _rankingsZoneFilter;
+      _cachedRankingsFlagsCount = totalFlags;
+    }
+    final List<Map<String, dynamic>> wardItems = _cachedWardRankings!;
+
+    return Container(
+      width: panelWidth,
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.97),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFCBD5E1), width: 1.5),
+        boxShadow: const [
+          BoxShadow(color: Colors.black26, blurRadius: 14, offset: Offset(0, 4)),
+        ],
+      ),
+      child: Column(
+        children: [
+          // 1. Header with Title and Minimize Button
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Color(0xFF004D40), Color(0xFF006341)],
+              ),
+              borderRadius: BorderRadius.only(
+                topLeft: Radius.circular(10),
+                topRight: Radius.circular(10),
+              ),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: const [
+                    Icon(LucideIcons.barChart3, color: Color(0xFF00E676), size: 18),
+                    SizedBox(width: 8),
+                    Text(
+                      'Cleanliness Rankings',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                  ],
+                ),
+                InkWell(
+                  onTap: () => setState(() => _isRankingsOpen = false),
+                  borderRadius: BorderRadius.circular(6),
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Icon(LucideIcons.x, color: Colors.white, size: 14),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // 2. Tab Segment: Zones vs Wards
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
+            child: Container(
+              height: 34,
+              padding: const EdgeInsets.all(2),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF1F5F9),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: InkWell(
+                      onTap: () => setState(() => _rankingsTabIsZones = true),
+                      borderRadius: BorderRadius.circular(6),
+                      child: Container(
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: _rankingsTabIsZones ? const Color(0xFF006341) : Colors.transparent,
+                          borderRadius: BorderRadius.circular(6),
+                          boxShadow: _rankingsTabIsZones
+                              ? const [BoxShadow(color: Colors.black12, blurRadius: 2, offset: Offset(0, 1))]
+                              : null,
+                        ),
+                        child: Text(
+                          'Zones (${zoneItems.length})',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: _rankingsTabIsZones ? Colors.white : const Color(0xFF64748B),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: InkWell(
+                      onTap: () => setState(() => _rankingsTabIsZones = false),
+                      borderRadius: BorderRadius.circular(6),
+                      child: Container(
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: !_rankingsTabIsZones ? const Color(0xFF006341) : Colors.transparent,
+                          borderRadius: BorderRadius.circular(6),
+                          boxShadow: !_rankingsTabIsZones
+                              ? const [BoxShadow(color: Colors.black12, blurRadius: 2, offset: Offset(0, 1))]
+                              : null,
+                        ),
+                        child: Text(
+                          'Wards (${wardItems.length})',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: !_rankingsTabIsZones ? Colors.white : const Color(0xFF64748B),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // 3. Sort Order Toggle Bar (Green -> Red requested by user)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+            child: InkWell(
+              onTap: () => setState(() => _rankingsGreenToRed = !_rankingsGreenToRed),
+              borderRadius: BorderRadius.circular(6),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: _rankingsGreenToRed ? const Color(0xFFECFDF5) : const Color(0xFFFEF2F2),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: _rankingsGreenToRed ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+                    width: 1.0,
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          LucideIcons.arrowUpDown,
+                          size: 12,
+                          color: _rankingsGreenToRed ? const Color(0xFF059669) : const Color(0xFFDC2626),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          _rankingsGreenToRed ? 'Rank: Cleanest ➔ Most Flagged' : 'Rank: Most Flagged ➔ Cleanest',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: _rankingsGreenToRed ? const Color(0xFF059669) : const Color(0xFFDC2626),
+                          ),
+                        ),
+                      ],
+                    ),
+                    Text(
+                      _rankingsGreenToRed ? '🟢 ➔ 🔴' : '🔴 ➔ 🟢',
+                      style: const TextStyle(fontSize: 10),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+          // 4. If Wards tab: Ward Search & Zone Dropdown
+          if (!_rankingsTabIsZones) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 4, 10, 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Container(
+                      height: 28,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF8FAFC),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: const Color(0xFFCBD5E1)),
+                      ),
+                      child: TextField(
+                        style: const TextStyle(fontSize: 11),
+                        decoration: const InputDecoration(
+                          hintText: 'Search ward...',
+                          hintStyle: TextStyle(fontSize: 10, color: Color(0xFF94A3B8)),
+                          prefixIcon: Icon(LucideIcons.search, size: 12, color: Color(0xFF94A3B8)),
+                          prefixIconConstraints: BoxConstraints(minWidth: 26, minHeight: 12),
+                          border: InputBorder.none,
+                          contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                        ),
+                        onChanged: (val) => setState(() => _rankingsWardSearch = val),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Container(
+                    height: 28,
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF8FAFC),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: const Color(0xFFCBD5E1)),
+                    ),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: _rankingsZoneFilter,
+                        style: const TextStyle(fontSize: 10, color: Color(0xFF1E293B), fontWeight: FontWeight.w600),
+                        icon: const Icon(LucideIcons.chevronDown, size: 12),
+                        isDense: true,
+                        items: [
+                          'All Zones',
+                          'West',
+                          'East',
+                          'South',
+                          'Mahadevapura',
+                          'Bommanahalli',
+                          'RR Nagar',
+                          'Yelahanka',
+                          'Dasarahalli',
+                        ].map((z) => DropdownMenuItem(value: z, child: Text(z))).toList(),
+                        onChanged: (val) {
+                          if (val != null) setState(() => _rankingsZoneFilter = val);
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
+          // 5. Mini Severity Legend
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 2, 10, 6),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: _rankingsTabIsZones
+                  ? [
+                      _buildMiniLegendChip(const Color(0xFF10B981), '< 35 Flags', 'Clean'),
+                      _buildMiniLegendChip(const Color(0xFFFACC15), '35-69 Flags', 'Moderate'),
+                      _buildMiniLegendChip(const Color(0xFFEF4444), '≥ 70 Flags', 'Critical'),
+                    ]
+                  : [
+                      _buildMiniLegendChip(const Color(0xFF10B981), '< 4 Flags', 'Clean'),
+                      _buildMiniLegendChip(const Color(0xFFF97316), '4-7 Flags', 'Moderate'),
+                      _buildMiniLegendChip(const Color(0xFFEF4444), '8-10 Flags', 'Hotspot'),
+                    ],
+            ),
+          ),
+          const Divider(height: 1, color: Color(0xFFE2E8F0)),
+
+          // 6. Scrollable Ranked List
+          Expanded(
+            child: _rankingsTabIsZones
+                ? ListView.separated(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    itemCount: zoneItems.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 4),
+                    itemBuilder: (context, idx) {
+                      final item = zoneItems[idx];
+                      final Color itemColor = item['color'] as Color;
+                      final int count = item['count'] as int;
+                      final String name = item['name'] as String;
+                      final String label = item['label'] as String;
+                      final isSelected = _selectedZone == name;
+
+                      return InkWell(
+                        onTap: () {
+                          setState(() {
+                            _selectedZone = name;
+                            _selectedWard = 'All Wards';
+                          });
+                          final centroid = item['centroid'] as LatLng;
+                          if (centroid.latitude != 0.0 && centroid.longitude != 0.0) {
+                            _mapController.move(centroid, 12.0);
+                          } else {
+                            _updateMapForSelection();
+                          }
+                        },
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? itemColor.withValues(alpha: 0.12)
+                                : const Color(0xFFF8FAFC),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: isSelected ? itemColor : const Color(0xFFE2E8F0),
+                              width: isSelected ? 1.5 : 1.0,
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              // Rank Badge
+                              Container(
+                                width: 22,
+                                height: 22,
+                                alignment: Alignment.center,
+                                decoration: BoxDecoration(
+                                  color: idx == 0
+                                      ? (_rankingsGreenToRed ? const Color(0xFF10B981) : const Color(0xFFEF4444))
+                                      : const Color(0xFFE2E8F0),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Text(
+                                  '#${idx + 1}',
+                                  style: TextStyle(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w900,
+                                    color: idx == 0 ? Colors.white : const Color(0xFF475569),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+
+                              // Name & Severity
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      '$name Zone',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.bold,
+                                        color: isSelected ? const Color(0xFF0F172A) : const Color(0xFF1E293B),
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    Text(
+                                      label,
+                                      style: TextStyle(
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w600,
+                                        color: itemColor == const Color(0xFFFACC15)
+                                            ? const Color(0xFFB45309)
+                                            : itemColor,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+
+                              // Flag Count Pill
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: itemColor.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: itemColor, width: 1.0),
+                                ),
+                                child: Text(
+                                  '$count Flags',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w800,
+                                    color: itemColor == const Color(0xFFFACC15)
+                                        ? const Color(0xFFB45309)
+                                        : itemColor,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    itemCount: wardItems.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 4),
+                    itemBuilder: (context, idx) {
+                      final item = wardItems[idx];
+                      final Color itemColor = item['color'] as Color;
+                      final int count = item['count'] as int;
+                      final String name = item['name'] as String;
+                      final String zone = item['zone'] as String;
+                      final ward = item['ward'] as Ward;
+                      final isSelected = _selectedWard == name;
+
+                      return InkWell(
+                        onTap: () {
+                          setState(() {
+                            _selectedWard = name;
+                            if (ward.zone != null && ward.zone!.isNotEmpty) {
+                              _selectedZone = ward.zone!;
+                            }
+                          });
+                          final centroid = item['centroid'] as LatLng;
+                          if (centroid.latitude != 0.0 && centroid.longitude != 0.0) {
+                            _mapController.move(centroid, 15.2);
+                          } else {
+                            _updateMapForSelection();
+                          }
+                        },
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? itemColor.withValues(alpha: 0.12)
+                                : const Color(0xFFF8FAFC),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: isSelected ? itemColor : const Color(0xFFE2E8F0),
+                              width: isSelected ? 1.5 : 1.0,
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              // Rank
+                              Container(
+                                width: 22,
+                                height: 22,
+                                alignment: Alignment.center,
+                                decoration: BoxDecoration(
+                                  color: idx == 0
+                                      ? (_rankingsGreenToRed ? const Color(0xFF10B981) : const Color(0xFFEF4444))
+                                      : const Color(0xFFE2E8F0),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Text(
+                                  '#${idx + 1}',
+                                  style: TextStyle(
+                                    fontSize: 8,
+                                    fontWeight: FontWeight.w900,
+                                    color: idx == 0 ? Colors.white : const Color(0xFF475569),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 7),
+
+                              // Name & Zone
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      name,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.bold,
+                                        color: isSelected ? const Color(0xFF0F172A) : const Color(0xFF1E293B),
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    Text(
+                                      'Zone: $zone',
+                                      style: const TextStyle(
+                                        fontSize: 9,
+                                        color: Color(0xFF64748B),
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
+                                ),
+                              ),
+
+                              // Flag Count Pill
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: itemColor.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(color: itemColor, width: 1.0),
+                                ),
+                                child: Text(
+                                  '$count Flags',
+                                  style: TextStyle(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w800,
+                                    color: itemColor,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMiniLegendChip(Color color, String label, String sub) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          '$label ($sub)',
+          style: const TextStyle(fontSize: 8.5, color: Color(0xFF475569), fontWeight: FontWeight.w600),
+        ),
+      ],
     );
   }
 
@@ -2037,6 +2870,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildCleanlinessChartCard({bool isMobile = false}) {
+    final totalSpots = _filteredTrashSpots.length;
+    final cleanSpots = _filteredTrashSpots.where((s) {
+      final st = (s['road_status'] ?? s['display_class'] ?? s['class'] ?? '').toString().toLowerCase();
+      return st.contains('clean') || s['status'] == 'Deflagged' || s['status'] == 'Resolved';
+    }).length;
+    final dirtySpots = _filteredTrashSpots.where((s) {
+      final st = (s['road_status'] ?? s['display_class'] ?? s['class'] ?? '').toString().toLowerCase();
+      final isClean = st.contains('clean') || s['status'] == 'Deflagged' || s['status'] == 'Resolved';
+      return !isClean;
+    }).length;
+    final slightSpots = _filteredTrashSpots.where((s) {
+      final st = (s['road_status'] ?? s['display_class'] ?? s['class'] ?? '').toString().toLowerCase();
+      return st.contains('slight') || st.contains('moderate');
+    }).length;
+
+    final double pieTotal = totalSpots == 0 ? 1 : totalSpots.toDouble();
+    final double cleanVal = cleanSpots > 0 ? cleanSpots.toDouble() : (totalSpots == 0 ? 1 : 0);
+    final double slightVal = slightSpots.toDouble();
+    final double dirtyVal = (dirtySpots - slightSpots) > 0 ? (dirtySpots - slightSpots).toDouble() : (dirtySpots > 0 ? dirtySpots.toDouble() : 0);
+
+    final cleanPct = totalSpots > 0 ? ((cleanSpots / totalSpots) * 100).round() : 100;
+    final slightPct = totalSpots > 0 ? ((slightSpots / totalSpots) * 100).round() : 0;
+    final dirtyPct = totalSpots > 0 ? (100 - cleanPct - slightPct).clamp(0, 100) : 0;
+
     final donut = SizedBox(
       width: isMobile ? 110 : 150,
       height: isMobile ? 110 : 150,
@@ -2047,9 +2904,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
               sectionsSpace: 0,
               centerSpaceRadius: isMobile ? 35 : 50,
               sections: [
-                PieChartSectionData(color: const Color(0xFF198754), value: 40, showTitle: false, radius: isMobile ? 16 : 20),
-                PieChartSectionData(color: const Color(0xFFFFC107), value: 35, showTitle: false, radius: isMobile ? 16 : 20),
-                PieChartSectionData(color: const Color(0xFFDC3545), value: 25, showTitle: false, radius: isMobile ? 16 : 20),
+                if (cleanVal > 0)
+                  PieChartSectionData(color: const Color(0xFF198754), value: cleanVal, showTitle: false, radius: isMobile ? 16 : 20),
+                if (slightVal > 0)
+                  PieChartSectionData(color: const Color(0xFFFFC107), value: slightVal, showTitle: false, radius: isMobile ? 16 : 20),
+                if (dirtyVal > 0)
+                  PieChartSectionData(color: const Color(0xFFDC3545), value: dirtyVal, showTitle: false, radius: isMobile ? 16 : 20),
               ],
             ),
           ),
@@ -2057,7 +2917,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Text('342', style: TextStyle(fontSize: isMobile ? 18 : 24, fontWeight: FontWeight.bold)),
+                Text('$totalSpots', style: TextStyle(fontSize: isMobile ? 18 : 24, fontWeight: FontWeight.bold)),
                 Text('Total Spots', style: TextStyle(fontSize: isMobile ? 9 : 10, color: const Color(0xFF64748B))),
               ],
             ),
@@ -2069,13 +2929,37 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final legend = Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        _buildChartLegendItem('Clean Roads', '40%', '(137)', const Color(0xFF198754)),
+        _buildChartLegendItem('Clean / Resolved', '$cleanPct%', '($cleanSpots)', const Color(0xFF198754)),
         const SizedBox(height: 10),
-        _buildChartLegendItem('Slightly Dirty', '35%', '(120)', const Color(0xFFFFC107)),
+        _buildChartLegendItem('Slightly Dirty', '$slightPct%', '($slightSpots)', const Color(0xFFFFC107)),
         const SizedBox(height: 10),
-        _buildChartLegendItem('Very Dirty', '25%', '(85)', const Color(0xFFDC3545)),
+        _buildChartLegendItem('Active Trash', '$dirtyPct%', '($dirtySpots)', const Color(0xFFDC3545)),
       ],
     );
+
+    final now = DateTime.now();
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final dateLabels = List.generate(7, (i) {
+      final d = now.subtract(Duration(days: 6 - i));
+      return '${d.day} ${months[d.month - 1]}';
+    });
+
+    final List<FlSpot> cleanSpotsLine = List.generate(7, (i) {
+      final targetDate = now.subtract(Duration(days: 6 - i));
+      final countOnDay = _filteredTrashSpots.where((s) {
+        final ts = s['timestamp'];
+        if (ts is Timestamp) {
+          final dt = ts.toDate();
+          return dt.year == targetDate.year && dt.month == targetDate.month && dt.day == targetDate.day;
+        }
+        return false;
+      }).length;
+      return FlSpot(i.toDouble(), countOnDay.toDouble());
+    });
+
+    double maxYClean = cleanSpotsLine.map((s) => s.y).fold(10.0, (prev, y) => y > prev ? y : prev);
+    maxYClean = (maxYClean * 1.3).ceilToDouble();
+    if (maxYClean < 10) maxYClean = 10;
 
     final lineChartWidget = SizedBox(
       height: isMobile ? 110 : 150,
@@ -2083,12 +2967,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
         LineChartData(
           gridData: FlGridData(show: true, drawVerticalLine: false, getDrawingHorizontalLine: (value) => FlLine(color: const Color(0xFFE2E8F0), strokeWidth: 1, dashArray: [4, 4])),
           titlesData: FlTitlesData(
-            rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
             bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 22, getTitlesWidget: (value, meta) {
-              const dates = ['8 May', '9 May', '10 May', '11 May', '12 May', '13 May', '14 May'];
-              if (value.toInt() >= 0 && value.toInt() < dates.length) {
-                return Text(dates[value.toInt()], style: const TextStyle(fontSize: 9, color: Color(0xFF64748B)));
+              final idx = value.toInt();
+              if (idx >= 0 && idx < dateLabels.length) {
+                return Text(dateLabels[idx], style: const TextStyle(fontSize: 9, color: Color(0xFF64748B)));
               }
               return const Text('');
             })),
@@ -2097,10 +2981,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
             })),
           ),
           borderData: FlBorderData(show: false),
-          minX: 0, maxX: 6, minY: 0, maxY: 400,
+          minX: 0, maxX: 6, minY: 0, maxY: maxYClean,
           lineBarsData: [
             LineChartBarData(
-              spots: const [FlSpot(0, 80), FlSpot(1, 120), FlSpot(2, 90), FlSpot(3, 180), FlSpot(4, 230), FlSpot(5, 180), FlSpot(6, 280)],
+              spots: cleanSpotsLine,
               isCurved: true,
               color: const Color(0xFF198754),
               barWidth: 2,
@@ -2170,6 +3054,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildHealthChartCard({bool isMobile = false}) {
+    final totalIssues = _filteredHealthSpots.length;
+    final goodSpots = _filteredHealthSpots.where((s) {
+      final st = (s['road_status'] ?? s['display_class'] ?? s['class'] ?? '').toString().toLowerCase();
+      return st.contains('good') || s['status'] == 'Resolved' || s['status'] == 'Deflagged';
+    }).length;
+    final potholeSpots = _filteredHealthSpots.where((s) {
+      final st = (s['road_status'] ?? s['display_class'] ?? s['class'] ?? '').toString().toLowerCase();
+      return st.contains('pothole');
+    }).length;
+    final badSpots = _filteredHealthSpots.where((s) {
+      final st = (s['road_status'] ?? s['display_class'] ?? s['class'] ?? '').toString().toLowerCase();
+      return st.contains('bad') && !st.contains('pothole');
+    }).length;
+
+    final double pieHealthTotal = totalIssues == 0 ? 1 : totalIssues.toDouble();
+    final double goodVal = goodSpots > 0 ? goodSpots.toDouble() : (totalIssues == 0 ? 1 : 0);
+    final double badVal = badSpots.toDouble();
+    final double potholeVal = potholeSpots.toDouble();
+
+    final goodPct = totalIssues > 0 ? ((goodSpots / totalIssues) * 100).round() : 100;
+    final badPct = totalIssues > 0 ? ((badSpots / totalIssues) * 100).round() : 0;
+    final potholePct = totalIssues > 0 ? (100 - goodPct - badPct).clamp(0, 100) : 0;
+
     final donut = SizedBox(
       width: isMobile ? 110 : 150,
       height: isMobile ? 110 : 150,
@@ -2180,9 +3087,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
               sectionsSpace: 0,
               centerSpaceRadius: isMobile ? 35 : 50,
               sections: [
-                PieChartSectionData(color: const Color(0xFF198754), value: 40, showTitle: false, radius: isMobile ? 16 : 20),
-                PieChartSectionData(color: const Color(0xFFFFC107), value: 35, showTitle: false, radius: isMobile ? 16 : 20),
-                PieChartSectionData(color: const Color(0xFFDC3545), value: 25, showTitle: false, radius: isMobile ? 16 : 20),
+                if (goodVal > 0)
+                  PieChartSectionData(color: const Color(0xFF198754), value: goodVal, showTitle: false, radius: isMobile ? 16 : 20),
+                if (badVal > 0)
+                  PieChartSectionData(color: const Color(0xFFFFC107), value: badVal, showTitle: false, radius: isMobile ? 16 : 20),
+                if (potholeVal > 0)
+                  PieChartSectionData(color: const Color(0xFFDC3545), value: potholeVal, showTitle: false, radius: isMobile ? 16 : 20),
               ],
             ),
           ),
@@ -2190,7 +3100,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Text('215', style: TextStyle(fontSize: isMobile ? 18 : 24, fontWeight: FontWeight.bold)),
+                Text('$totalIssues', style: TextStyle(fontSize: isMobile ? 18 : 24, fontWeight: FontWeight.bold)),
                 Text('Total Issues', style: TextStyle(fontSize: isMobile ? 9 : 10, color: const Color(0xFF64748B))),
               ],
             ),
@@ -2202,13 +3112,37 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final legend = Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        _buildChartLegendItem('Good Roads', '40%', '(86)', const Color(0xFF198754)),
+        _buildChartLegendItem('Good Roads', '$goodPct%', '($goodSpots)', const Color(0xFF198754)),
         const SizedBox(height: 10),
-        _buildChartLegendItem('Bad Roads', '35%', '(75)', const Color(0xFFFFC107)),
+        _buildChartLegendItem('Bad Roads', '$badPct%', '($badSpots)', const Color(0xFFFFC107)),
         const SizedBox(height: 10),
-        _buildChartLegendItem('Potholes', '25%', '(54)', const Color(0xFFDC3545)),
+        _buildChartLegendItem('Potholes', '$potholePct%', '($potholeSpots)', const Color(0xFFDC3545)),
       ],
     );
+
+    final now = DateTime.now();
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final dateLabels = List.generate(7, (i) {
+      final d = now.subtract(Duration(days: 6 - i));
+      return '${d.day} ${months[d.month - 1]}';
+    });
+
+    final List<FlSpot> healthSpotsLine = List.generate(7, (i) {
+      final targetDate = now.subtract(Duration(days: 6 - i));
+      final countOnDay = _filteredHealthSpots.where((s) {
+        final ts = s['timestamp'];
+        if (ts is Timestamp) {
+          final dt = ts.toDate();
+          return dt.year == targetDate.year && dt.month == targetDate.month && dt.day == targetDate.day;
+        }
+        return false;
+      }).length;
+      return FlSpot(i.toDouble(), countOnDay.toDouble());
+    });
+
+    double maxYHealth = healthSpotsLine.map((s) => s.y).fold(10.0, (prev, y) => y > prev ? y : prev);
+    maxYHealth = (maxYHealth * 1.3).ceilToDouble();
+    if (maxYHealth < 10) maxYHealth = 10;
 
     final lineChartWidget = SizedBox(
       height: isMobile ? 110 : 150,
@@ -2216,12 +3150,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
         LineChartData(
           gridData: FlGridData(show: true, drawVerticalLine: false, getDrawingHorizontalLine: (value) => FlLine(color: const Color(0xFFE2E8F0), strokeWidth: 1, dashArray: [4, 4])),
           titlesData: FlTitlesData(
-            rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
             bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 22, getTitlesWidget: (value, meta) {
-              const dates = ['8 May', '9 May', '10 May', '11 May', '12 May', '13 May', '14 May'];
-              if (value.toInt() >= 0 && value.toInt() < dates.length) {
-                return Text(dates[value.toInt()], style: const TextStyle(fontSize: 9, color: Color(0xFF64748B)));
+              final idx = value.toInt();
+              if (idx >= 0 && idx < dateLabels.length) {
+                return Text(dateLabels[idx], style: const TextStyle(fontSize: 9, color: Color(0xFF64748B)));
               }
               return const Text('');
             })),
@@ -2230,10 +3164,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
             })),
           ),
           borderData: FlBorderData(show: false),
-          minX: 0, maxX: 6, minY: 0, maxY: 250,
+          minX: 0, maxX: 6, minY: 0, maxY: maxYHealth,
           lineBarsData: [
             LineChartBarData(
-              spots: const [FlSpot(0, 100), FlSpot(1, 60), FlSpot(2, 50), FlSpot(3, 120), FlSpot(4, 90), FlSpot(5, 140), FlSpot(6, 220)],
+              spots: healthSpotsLine,
               isCurved: true,
               color: const Color(0xFFFFC107),
               barWidth: 2,

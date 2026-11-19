@@ -18,12 +18,14 @@ import '../services/map_cache_service.dart';
 import '../models/vehicle.dart';
 import '../models/ward.dart';
 import '../models/zone.dart';
+import '../models/trail_segment.dart';
 import 'active_fleet_screen.dart';
 import 'database_screen.dart';
 import 'alerts_screen.dart';
 
 import '../models/garbage_flag.dart';
 import '../widgets/trash_pinpoint_marker.dart';
+import '../widgets/trash_flag_inspection_modal.dart';
 import '../services/ward_zone_service.dart';
 import '../services/trash_spots_service.dart';
 import '../services/role_service.dart';
@@ -66,8 +68,64 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
   List<LatLng> _selectedVehicleRoute = [];
 
   StreamSubscription<QuerySnapshot>? _trashSub;
-  List<Polyline> _snappedPolylines = [];
+  final Map<String, StreamSubscription> _vehicleDailyStatsSubs = {};
+  final Map<String, List<Polyline>> _vehicleTrails = {};
+  List<Polyline> _selectedVehiclePolylines = [];
+  StreamSubscription? _selectedVehicleStatsSub;
   bool _initialMapCentered = false;
+
+  double _currentMapZoom = 13.0;
+  List<Marker> _cachedTrashMarkers = [];
+  int _cachedTrashCount = -1;
+  String _cachedMarkerFilterKey = '';
+
+  List<Marker> _getOrCreateTrashMarkers(List<GarbageFlag> flags) {
+    final filterKey = '${flags.length}_${_selectedZone}_${_selectedWard}';
+    if (_cachedTrashCount == flags.length && _cachedMarkerFilterKey == filterKey && _cachedTrashMarkers.isNotEmpty) {
+      return _cachedTrashMarkers;
+    }
+
+    const double clusterDist = 0.00018;
+    final List<List<GarbageFlag>> clusters = [];
+
+    for (var flag in flags) {
+      if (!flag.isTrashDetected) continue;
+      bool added = false;
+      for (var c in clusters) {
+        if ((flag.lat - c.first.lat).abs() < clusterDist && (flag.lng - c.first.lng).abs() < clusterDist) {
+          c.add(flag);
+          added = true;
+          break;
+        }
+      }
+      if (!added) {
+        clusters.add([flag]);
+      }
+    }
+
+    final List<Marker> markers = [];
+    for (var cluster in clusters) {
+      final flag = cluster.first;
+      final isVeryDirty = cluster.any((f) => f.className == 'Very_Dirty' || f.displayClass == 'Very Dirty');
+
+      markers.add(Marker(
+        point: LatLng(flag.lat, flag.lng),
+        width: 38,
+        height: 46,
+        alignment: Alignment.topCenter,
+        child: TrashPinpointWidget(
+          count: cluster.length,
+          isVeryDirty: isVeryDirty,
+          onTap: () => _showTrashPopup(flag),
+        ),
+      ));
+    }
+
+    _cachedTrashCount = flags.length;
+    _cachedMarkerFilterKey = filterKey;
+    _cachedTrashMarkers = markers;
+    return _cachedTrashMarkers;
+  }
 
   @override
   void initState() {
@@ -105,7 +163,6 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
       _garbageFlags = active;
       _allRoadFlags = allRoad;
     });
-    _recalculatePolylines();
 
     if (!_initialMapCentered && _garbageFlags.isNotEmpty) {
       _initialMapCentered = true;
@@ -115,115 +172,66 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
     }
   }
 
-  Future<void> _recalculatePolylines() async {
-    final sourceFlags = _allRoadFlags.isNotEmpty ? _allRoadFlags : _garbageFlags;
-    Map<String, List<GarbageFlag>> sessions = {};
-    for (var flag in sourceFlags) {
-      final key = flag.sessionId ?? (flag.vehicleNumber.isNotEmpty ? flag.vehicleNumber : 'default_track');
-      sessions.putIfAbsent(key, () => []).add(flag);
-    }
-
-    List<Polyline> instantPolylines = [];
-    List<Map<String, dynamic>> segmentJobs = [];
-
-    for (var list in sessions.values) {
-      list.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-      for (int i = 0; i < list.length - 1; i++) {
-        final start = LatLng(list[i].lat, list[i].lng);
-        final end = LatLng(list[i + 1].lat, list[i + 1].lng);
-        final dist = const Distance().as(LengthUnit.Meter, start, end);
-        
-        // Never connect distant trash flags (> 80m) - avoids cross-city diagonal lines
-        if (dist > 80.0) continue;
-
-        final flag = list[i + 1];
-        final status = (flag.displayClass.isNotEmpty ? flag.displayClass : flag.className);
-        final sLower = status.toLowerCase();
-        final isNoTrash = sLower.contains('no trash') || sLower.contains('no_trash') || sLower.contains('clean');
-        
-        // Accurate 3-way Road Cleanliness Color Mapping
-        Color segmentColor = const Color(0xFF00E676); // Vibrant Green (Clean Road / No Trash Detected)
-        if (flag.className == 'Very_Dirty' || flag.displayClass == 'Very Dirty' || flag.displayClass == 'Very Dirty Road' || status.contains('Very Dirty')) {
-          segmentColor = const Color(0xFFFF1744); // Vibrant Red (Very Dirty Road)
-        } else if (!isNoTrash && (flag.isTrashDetected || flag.className == 'Trash_Detected' || status.contains('Trash') || flag.trashCount > 0)) {
-          segmentColor = const Color(0xFFFF9100); // Vibrant Amber / Orange (Trash Detected)
-        }
-
-        if (dist <= 25.0) {
-          instantPolylines.add(Polyline(
-            points: [start, end],
-            color: segmentColor,
-            strokeWidth: 6.0,
-            borderStrokeWidth: 1.0,
-            borderColor: Colors.black12,
-          ));
-        }
-
-        segmentJobs.add({
-          'start': start,
-          'end': end,
-          'color': segmentColor,
-          'distance': dist,
-        });
-      }
-    }
-
-    // Immediately show the road colored polylines with zero latency
-    if (mounted) {
-      setState(() {
-        _snappedPolylines = instantPolylines;
-      });
-    }
-
-    // Asynchronously enhance segments with OSRM road snapping in parallel
-    if (segmentJobs.isEmpty) return;
-
-    try {
-      final snappedResults = await Future.wait(segmentJobs.map((job) async {
-        final start = job['start'] as LatLng;
-        final end = job['end'] as LatLng;
-        final color = job['color'] as Color;
-        final dist = (job['distance'] as num?)?.toDouble() ?? 50.0;
-        try {
-          final url = 'https://router.project-osrm.org/route/v1/driving/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=geojson';
-          final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 3));
-          if (response.statusCode == 200) {
-            final data = json.decode(response.body);
-            if (data['routes'] != null && data['routes'].isNotEmpty) {
-              final coords = data['routes'][0]['geometry']['coordinates'] as List;
-              final snappedPoints = coords.map((c) => LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble())).toList();
-              if (snappedPoints.length >= 2) {
-                return Polyline(
-                  points: snappedPoints,
-                  color: color,
-                  strokeWidth: 6.0,
-                  borderStrokeWidth: 1.0,
-                  borderColor: Colors.black12,
-                );
+  void _syncVehicleTrails(List<Vehicle> vehicles) {
+    for (var v in vehicles) {
+      final vNum = v.vehicleNumber.isNotEmpty ? v.vehicleNumber : v.id;
+      if (!_vehicleDailyStatsSubs.containsKey(vNum)) {
+        _vehicleDailyStatsSubs[vNum] = FirebaseFirestore.instance
+            .collection('vehicles')
+            .doc(vNum)
+            .collection('daily_stats')
+            .doc(_todayDateString)
+            .snapshots()
+            .listen((doc) {
+          if (!mounted) return;
+          if (doc.exists && doc.data() != null) {
+            final polylines = TrailSegment.listFromDailyStats(doc.data());
+            setState(() {
+              _vehicleTrails[vNum] = polylines;
+              if (_selectedVehicle != null && (_selectedVehicle!.vehicleNumber == vNum || _selectedVehicle!.id == vNum)) {
+                _selectedVehiclePolylines = polylines;
               }
-            }
+            });
           }
-        } catch (_) {}
-        // Fallback: only if points are close together
-        if (dist <= 25.0) {
-          return Polyline(
-            points: [start, end],
-            color: color,
-            strokeWidth: 6.0,
-            borderStrokeWidth: 1.0,
-            borderColor: Colors.black12,
-          );
-        }
-        return Polyline(points: const [], color: Colors.transparent);
-      }));
+        }, onError: (_) {});
+      }
+    }
+  }
 
-      if (mounted) {
+  void _selectVehicle(Vehicle vehicle) {
+    final vNum = vehicle.vehicleNumber.isNotEmpty ? vehicle.vehicleNumber : vehicle.id;
+    setState(() {
+      _selectedVehicle = vehicle;
+      _selectedVehiclePolylines = _vehicleTrails[vNum] ?? [];
+    });
+    if (vehicle.currentLocation != null) {
+      _mapController.move(vehicle.currentLocation!, 15.5);
+    }
+    _selectedVehicleStatsSub?.cancel();
+    _selectedVehicleStatsSub = FirebaseFirestore.instance
+        .collection('vehicles')
+        .doc(vNum)
+        .collection('daily_stats')
+        .doc(_todayDateString)
+        .snapshots()
+        .listen((doc) {
+      if (!mounted) return;
+      if (doc.exists && doc.data() != null) {
         setState(() {
-          _snappedPolylines = snappedResults.where((p) => p.points.isNotEmpty).toList();
+          _selectedVehiclePolylines = TrailSegment.listFromDailyStats(doc.data());
         });
       }
-    } catch (_) {}
+    }, onError: (_) {});
   }
+
+  void _clearVehicleSelection() {
+    setState(() {
+      _selectedVehicle = null;
+      _selectedVehiclePolylines = [];
+    });
+    _selectedVehicleStatsSub?.cancel();
+  }
+
 
   void _fetchDataFromFirestore() {
     _vehiclesSub = FirebaseFirestore.instance.collection('vehicles').snapshots().listen((snapshot) {
@@ -260,6 +268,7 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
           }
         }
         _vehicles = vehicles;
+        _syncVehicleTrails(vehicles);
         if (_selectedVehicle != null) {
           final index = _vehicles.indexWhere((v) => v.id == _selectedVehicle!.id);
           if (index != -1) _selectedVehicle = _vehicles[index];
@@ -322,6 +331,10 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
   void dispose() {
     WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
     TrashSpotsService.instance.flagsNotifier.removeListener(_onTrashSpotsUpdated);
+    for (var sub in _vehicleDailyStatsSubs.values) {
+      sub.cancel();
+    }
+    _selectedVehicleStatsSub?.cancel();
     _zonesSub?.cancel();
     _garbageTimer?.cancel();
     _liveTrackingSub?.cancel();
@@ -462,125 +475,165 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
       
       final centerLat = (minLat + maxLat) / 2;
       final centerLng = (minLng + maxLng) / 2;
-      _mapController.move(LatLng(centerLat, centerLng), 13.5);
+      final double targetZoom = (_selectedWard != 'All Wards')
+          ? 15.2
+          : ((_selectedZone != 'All Zones') ? 12.5 : 11.8);
+      _mapController.move(LatLng(centerLat, centerLng), targetZoom);
+    } else {
+      _mapController.move(const LatLng(12.9716, 77.5946), 11.8);
     }
   }
 
   Widget _buildFilterBar(bool isDesktop) {
-    final userWard = RoleService.currentUserWard;
-    final userZone = RoleService.currentUserZone;
+    final bool hasAllAccess = RoleService.hasAllAccess('Street Cleanliness AI');
+    final List<String> allowedZones = RoleService.getAllowedZonesForModule('Street Cleanliness AI');
+    final List<String> allowedWards = RoleService.getAllowedWardsForModule('Street Cleanliness AI');
 
-    List<String> availableWards = [];
-    if (_selectedZone != 'All Zones') {
-      final sZone = _zones.firstWhere((z) => z.name == _selectedZone, orElse: () => Zone(id: '', name: '', boundary: []));
-      if (sZone.boundary.isNotEmpty) {
-        availableWards = _wards
-            .where((w) => w.boundary.isNotEmpty && _isWardInZone(w, sZone))
-            .map((w) => w.name)
-            .toList();
-      }
-    } else {
-      availableWards = _wards.map((w) => w.name).toList();
+    List<String> zItems = (hasAllAccess ? _zones.map((z) => z.name).toList() : allowedZones).toList();
+    if (zItems.length > 1 && !zItems.contains('All Zones')) {
+      zItems.insert(0, 'All Zones');
     }
-    
-    List<String> wards = ['All Wards', ...availableWards.toSet()];
-    List<String> zones = ['All Zones', ..._zones.map((z) => z.name).toSet()];
+    final zones = zItems.isEmpty ? ['All Zones'] : zItems;
 
-    if (userWard != null && userWard.trim().isNotEmpty && userWard != 'All Wards') {
-      wards = [userWard];
-      if (_selectedWard != userWard) {
-        _selectedWard = userWard;
-      }
-    }
-    if (userZone != null && userZone.trim().isNotEmpty && userZone != 'All Zones') {
-      zones = [userZone];
-      if (_selectedZone != userZone) {
-        _selectedZone = userZone;
-      }
+    String validSelectedZone = _selectedZone;
+    if (!zones.contains(validSelectedZone) && zones.isNotEmpty) {
+      validSelectedZone = zones.first;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _selectedZone != validSelectedZone) {
+          setState(() {
+            _selectedZone = validSelectedZone;
+            _updateMapForSelection();
+          });
+        }
+      });
     }
 
-    final filterContent = Wrap(
-      spacing: 16,
-      runSpacing: 16,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
-        _buildFunctionalDropdown('Zone', _selectedZone, zones, (val) {
-          setState(() => _selectedZone = val);
-          _updateMapForSelection();
-        }),
-        _buildFunctionalDropdown('Ward', _selectedWard, wards, (val) {
-          setState(() => _selectedWard = val);
-          _updateMapForSelection();
-        }),
-        _buildFunctionalDatePicker(),
-        _buildFunctionalToggle(),
-        if (!isDesktop) // add the button to wrap on mobile
-          ElevatedButton.icon(
-            onPressed: () => _showAISettingsDialog(),
-            icon: const Icon(LucideIcons.settings, size: 16, color: Colors.white),
-            label: const Text('AI Settings', style: TextStyle(color: Colors.white)),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF0F5132),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+    List<String> wItems = _wards.where((w) {
+      if (!hasAllAccess && !allowedWards.contains('All Wards') && !allowedWards.contains(w.name)) return false;
+      if (validSelectedZone == 'All Zones') return true;
+      try {
+        final z = _zones.firstWhere((zm) => zm.name == validSelectedZone);
+        return _isWardInZone(w, z);
+      } catch (_) { return false; }
+    }).map((w) => w.name).toList();
+
+    if (wItems.length > 1 && !wItems.contains('All Wards')) {
+      wItems.insert(0, 'All Wards');
+    }
+    final wards = wItems.isEmpty ? ['All Wards'] : wItems;
+
+    String validSelectedWard = _selectedWard;
+    if (!wards.contains(validSelectedWard) && wards.isNotEmpty) {
+      validSelectedWard = wards.first;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _selectedWard != validSelectedWard) {
+          setState(() {
+            _selectedWard = validSelectedWard;
+            _updateMapForSelection();
+          });
+        }
+      });
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))],
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            // Role Indicator Badge
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey.shade300),
+                borderRadius: BorderRadius.circular(6),
+                color: const Color(0xFFF8FAFC),
+              ),
+              child: Row(
+                children: [
+                  const Text('Role: ', style: TextStyle(color: Color(0xFF64748B), fontSize: 14)),
+                  Text(RoleService.currentUserRoleTitle ?? 'None', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black)),
+                ],
+              ),
             ),
-          ),
-      ],
+            const SizedBox(width: 16),
+            _buildFunctionalDropdown('Zone', validSelectedZone, zones, (val) {
+              setState(() {
+                _selectedZone = val;
+                _selectedWard = 'All Wards';
+              });
+              _updateMapForSelection();
+            }),
+            const SizedBox(width: 16),
+            _buildFunctionalDropdown('Ward', validSelectedWard, wards, (val) {
+              setState(() => _selectedWard = val);
+              _updateMapForSelection();
+            }),
+            const SizedBox(width: 24),
+            Row(
+              children: [
+                Container(width: 8, height: 8, decoration: const BoxDecoration(color: Color(0xFF198754), shape: BoxShape.circle)),
+                const SizedBox(width: 8),
+                const Text('Live Tracking', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+              ],
+            ),
+            const SizedBox(width: 12),
+            Text(
+              'Last updated: ${TimeOfDay.now().format(context)}',
+              style: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
+            ),
+            const SizedBox(width: 20),
+            _buildFunctionalDatePicker(),
+            const SizedBox(width: 20),
+            _buildFunctionalToggle(),
+            const SizedBox(width: 20),
+            ElevatedButton.icon(
+              onPressed: () => _showAISettingsDialog(),
+              icon: const Icon(LucideIcons.settings, size: 16, color: Colors.white),
+              label: const Text('AI Settings', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF0F5132),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
-
-    if (isDesktop) {
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Expanded(child: filterContent),
-          const SizedBox(width: 16),
-          ElevatedButton.icon(
-            onPressed: () => _showAISettingsDialog(),
-            icon: const Icon(LucideIcons.settings, size: 16, color: Colors.white),
-            label: const Text('AI Settings', style: TextStyle(color: Colors.white)),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF0F5132),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            ),
-          ),
-        ],
-      );
-    }
-    
-    return filterContent;
   }
 
   Widget _buildFunctionalDropdown(String label, String value, List<String> items, Function(String) onChanged) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: const TextStyle(color: Colors.grey, fontSize: 12)),
-        const SizedBox(height: 4),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Colors.grey.shade300),
-          ),
-          child: DropdownButtonHideUnderline(
-            child: DropdownButton<String>(
-              value: items.contains(value) ? value : items.first,
-              icon: const Icon(Icons.keyboard_arrow_down, size: 16, color: Colors.grey),
-              style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w600),
-              dropdownColor: Colors.white,
-              onChanged: (String? newValue) {
-                if (newValue != null) onChanged(newValue);
-              },
-              items: items.map<DropdownMenuItem<String>>((String val) {
-                return DropdownMenuItem<String>(
-                  value: val,
-                  child: Text(val),
-                );
-              }).toList(),
-            ),
-          ),
+    return PopupMenuButton<String>(
+      onSelected: onChanged,
+      itemBuilder: (context) => items.map((item) => PopupMenuItem(value: item, child: Text(item))).toList(),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          border: Border.all(color: const Color(0xFFE2E8F0)),
+          borderRadius: BorderRadius.circular(8),
         ),
-      ],
+        child: Row(
+          children: [
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label, style: const TextStyle(fontSize: 10, color: Color(0xFF64748B))),
+                const SizedBox(height: 2),
+                Text(value, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+              ],
+            ),
+            const SizedBox(width: 20),
+            const Icon(Icons.keyboard_arrow_down, color: Color(0xFF64748B)),
+          ],
+        ),
+      ),
     );
   }
 
@@ -613,21 +666,31 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
         }
       },
       child: Container(
-        margin: const EdgeInsets.only(top: 18),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Colors.grey.shade300),
+          border: Border.all(color: const Color(0xFFE2E8F0)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(LucideIcons.calendar, size: 16, color: Colors.black54),
-            const SizedBox(width: 8),
-            Text(dateStr, style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.black87)),
-            const SizedBox(width: 8),
-            const Icon(LucideIcons.refreshCw, size: 16, color: Colors.black54),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Date', style: TextStyle(fontSize: 10, color: Color(0xFF64748B))),
+                const SizedBox(height: 2),
+                Row(
+                  children: [
+                    const Icon(LucideIcons.calendar, size: 14, color: Color(0xFF1E293B)),
+                    const SizedBox(width: 6),
+                    Text(dateStr, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Color(0xFF1E293B))),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(width: 16),
+            const Icon(Icons.keyboard_arrow_down, color: Color(0xFF64748B)),
           ],
         ),
       ),
@@ -641,11 +704,10 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
 
   Widget _buildFunctionalToggle() {
     return Container(
-      margin: const EdgeInsets.only(top: 18),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey.shade300),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -653,23 +715,23 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
           GestureDetector(
             onTap: () => setState(() => _isDailyView = true),
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               decoration: BoxDecoration(
                 color: _isDailyView ? const Color(0xFF0F5132) : Colors.transparent,
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: const BorderRadius.only(topLeft: Radius.circular(7), bottomLeft: Radius.circular(7)),
               ),
-              child: Text('Daily', style: TextStyle(color: _isDailyView ? Colors.white : Colors.black87, fontWeight: FontWeight.bold)),
+              child: Text('Daily', style: TextStyle(color: _isDailyView ? Colors.white : const Color(0xFF4B5563), fontWeight: FontWeight.bold, fontSize: 13)),
             ),
           ),
           GestureDetector(
             onTap: () => setState(() => _isDailyView = false),
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               decoration: BoxDecoration(
                 color: !_isDailyView ? const Color(0xFF0F5132) : Colors.transparent,
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: const BorderRadius.only(topRight: Radius.circular(7), bottomRight: Radius.circular(7)),
               ),
-              child: Text('Monthly', style: TextStyle(color: !_isDailyView ? Colors.white : Colors.black87, fontWeight: FontWeight.bold)),
+              child: Text('Monthly', style: TextStyle(color: !_isDailyView ? Colors.white : const Color(0xFF4B5563), fontWeight: FontWeight.bold, fontSize: 13)),
             ),
           ),
         ],
@@ -995,6 +1057,47 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
   }
 
   Widget _buildBarChartCard() {
+    final now = DateTime.now();
+    final dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    final List<Map<String, dynamic>> dayStats = List.generate(7, (i) {
+      final d = now.subtract(Duration(days: 6 - i));
+      final label = dayNames[d.weekday - 1];
+      final daySpots = _filteredGarbageFlags.where((f) {
+        final t = DateTime.tryParse(f.timestamp);
+        if (t == null) return false;
+        return t.year == d.year && t.month == d.month && t.day == d.day;
+      }).toList();
+      double score;
+      if (daySpots.isNotEmpty) {
+        final clean = daySpots.where((f) =>
+          f.className.toLowerCase().contains('clean') ||
+          f.status == 'Resolved' ||
+          f.status == 'Deflagged'
+        ).length;
+        score = (clean / daySpots.length) * 100.0;
+      } else {
+        final cumSpots = _filteredGarbageFlags.where((f) {
+          final t = DateTime.tryParse(f.timestamp);
+          if (t == null) return false;
+          return t.isBefore(d.add(const Duration(days: 1)));
+        }).toList();
+        if (cumSpots.isNotEmpty) {
+          final clean = cumSpots.where((f) =>
+            f.className.toLowerCase().contains('clean') ||
+            f.status == 'Resolved' ||
+            f.status == 'Deflagged'
+          ).length;
+          score = (clean / cumSpots.length) * 100.0;
+        } else {
+          score = 100.0;
+        }
+      }
+      return {
+        'label': label,
+        'value': score.clamp(0.0, 100.0),
+      };
+    });
+
     return Container(
       height: 350,
       decoration: BoxDecoration(
@@ -1066,11 +1169,14 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
                       sideTitles: SideTitles(
                         showTitles: true,
                         getTitlesWidget: (value, meta) {
-                          const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-                          if (value.toInt() >= 0 && value.toInt() < days.length) {
+                          final idx = value.toInt();
+                          if (idx >= 0 && idx < dayStats.length) {
                             return Padding(
                               padding: const EdgeInsets.only(top: 8.0),
-                              child: Text(days[value.toInt()], style: const TextStyle(color: Colors.black87, fontSize: 11, fontWeight: FontWeight.bold)),
+                              child: Text(
+                                dayStats[idx]['label'] as String,
+                                style: const TextStyle(color: Colors.black87, fontSize: 11, fontWeight: FontWeight.bold),
+                              ),
                             );
                           }
                           return const Text('');
@@ -1083,9 +1189,10 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
                         showTitles: true,
                         reservedSize: 24,
                         getTitlesWidget: (value, meta) {
-                          const yValues = [62, 68, 78, 70, 82, 85, 87];
-                          if (value.toInt() >= 0 && value.toInt() < yValues.length) {
-                            return Text('${yValues[value.toInt()]}%', style: const TextStyle(color: Colors.black87, fontSize: 10, fontWeight: FontWeight.bold));
+                          final idx = value.toInt();
+                          if (idx >= 0 && idx < dayStats.length) {
+                            final val = (dayStats[idx]['value'] as double).round();
+                            return Text('$val%', style: const TextStyle(color: Colors.black87, fontSize: 10, fontWeight: FontWeight.bold));
                           }
                           return const Text('');
                         },
@@ -1095,15 +1202,7 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
                   borderData: FlBorderData(show: false),
                   minY: 0,
                   maxY: 100,
-                  barGroups: [
-                    _buildBarGroup(0, 62),
-                    _buildBarGroup(1, 68),
-                    _buildBarGroup(2, 78),
-                    _buildBarGroup(3, 70),
-                    _buildBarGroup(4, 82),
-                    _buildBarGroup(5, 85),
-                    _buildBarGroup(6, 87),
-                  ],
+                  barGroups: List.generate(dayStats.length, (i) => _buildBarGroup(i, dayStats[i]['value'] as double)),
                 ),
               ),
             ),
@@ -1129,20 +1228,29 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
 
   Widget _buildDonutChartCard() {
     final list = _filteredGarbageFlags;
-    double total = list.isEmpty ? 1 : list.length.toDouble();
-    double cleanVal = list.where((f) => f.className == 'Clean').length.toDouble();
-    double slightVal = list.where((f) => f.className == 'Slightly_Dirty' || f.displayClass == 'Slightly Dirty').length.toDouble();
-    double dirtyVal = list.where((f) => f.className == 'Trash_Detected' || f.className == 'Very_Dirty' || f.displayClass == 'Trash Detected' || f.displayClass == 'Very Dirty').length.toDouble();
+    double cleanVal = list.where((f) =>
+      f.className.toLowerCase().contains('clean') ||
+      f.displayClass.toLowerCase().contains('clean') ||
+      f.status == 'Resolved' ||
+      f.status == 'Deflagged'
+    ).length.toDouble();
+    double slightVal = list.where((f) =>
+      (f.className.toLowerCase().contains('slight') || f.displayClass.toLowerCase().contains('slight')) &&
+      f.status != 'Resolved' &&
+      f.status != 'Deflagged'
+    ).length.toDouble();
+    double dirtyVal = list.where((f) =>
+      (f.className.toLowerCase().contains('trash') ||
+       f.className.toLowerCase().contains('very') ||
+       f.className.toLowerCase().contains('dirty') ||
+       f.displayClass.toLowerCase().contains('trash') ||
+       f.displayClass.toLowerCase().contains('very') ||
+       f.displayClass.toLowerCase().contains('dirty')) &&
+      f.status != 'Resolved' &&
+      f.status != 'Deflagged'
+    ).length.toDouble();
 
-    if (cleanVal == 0 && slightVal == 0 && dirtyVal == 0) {
-      cleanVal = 137;
-      slightVal = 120;
-      dirtyVal = 85;
-      total = cleanVal + slightVal + dirtyVal;
-    } else {
-      total = cleanVal + slightVal + dirtyVal;
-      if (total == 0) total = 1;
-    }
+    double total = cleanVal + slightVal + dirtyVal;
 
     return Container(
       height: 350,
@@ -1172,38 +1280,44 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
                         PieChartData(
                           sectionsSpace: 4,
                           centerSpaceRadius: 50,
-                          sections: [
-                            if (cleanVal > 0)
-                              PieChartSectionData(
-                                color: Colors.green,
-                                value: cleanVal,
-                                title: '%',
-                                radius: 30,
-                                titleStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.transparent),
-                              ),
-                            if (slightVal > 0)
-                              PieChartSectionData(
-                                color: Colors.orange,
-                                value: slightVal,
-                                title: '%',
-                                radius: 30,
-                                titleStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.transparent),
-                              ),
-                            if (dirtyVal > 0)
-                              PieChartSectionData(
-                                color: Colors.red,
-                                value: dirtyVal,
-                                title: '%',
-                                radius: 30,
-                                titleStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.transparent),
-                              ),
-                          ],
+                          sections: total == 0
+                              ? [
+                                  PieChartSectionData(
+                                    color: Colors.grey.shade200,
+                                    value: 1,
+                                    showTitle: false,
+                                    radius: 26,
+                                  ),
+                                ]
+                              : [
+                                  if (cleanVal > 0)
+                                    PieChartSectionData(
+                                      color: Colors.green,
+                                      value: cleanVal,
+                                      title: '',
+                                      radius: 30,
+                                    ),
+                                  if (slightVal > 0)
+                                    PieChartSectionData(
+                                      color: Colors.orange,
+                                      value: slightVal,
+                                      title: '',
+                                      radius: 30,
+                                    ),
+                                  if (dirtyVal > 0)
+                                    PieChartSectionData(
+                                      color: Colors.red,
+                                      value: dirtyVal,
+                                      title: '',
+                                      radius: 30,
+                                    ),
+                                ],
                         ),
                       ),
                       Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text('', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.black87)),
+                          Text('${list.length}', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.black87)),
                           const Text('Total Spots', style: TextStyle(fontSize: 12, color: Colors.black54)),
                         ],
                       ),
@@ -1240,7 +1354,7 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
         const SizedBox(width: 8),
         Text(label, style: const TextStyle(color: Colors.black87, fontSize: 12, fontWeight: FontWeight.bold)),
         const Spacer(),
-        Text(' (%)', style: const TextStyle(color: Colors.black54, fontSize: 12, fontWeight: FontWeight.bold)),
+        Text('$count ($pct%)', style: const TextStyle(color: Colors.black54, fontSize: 12, fontWeight: FontWeight.bold)),
       ],
     );
   }
@@ -1252,267 +1366,187 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
   }
 
   void _showTrashPopup(GarbageFlag flag) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.white,
-        title: Text(
-          '${flag.className.replaceAll('_', ' ')} - ${flag.displayClass}',
-          style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
-        ),
-        content: SizedBox(
-          width: 600,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: Image.network(flag.imageUrl, headers: const {"ngrok-skip-browser-warning": "true"},
-                    height: 250, 
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Container(
-                      height: 250,
-                      color: Colors.grey.shade200,
-                      child: const Center(child: Icon(Icons.broken_image, size: 40, color: Colors.grey)),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    SizedBox(
-                      height: 180,
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: FlutterMap(
-                          options: MapOptions(
-                            initialCenter: LatLng(flag.lat, flag.lng),
-                            initialZoom: 16.0,
-                          ),
-                          children: [
-                            TileLayer(
-                              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                              userAgentPackageName: 'com.nitin.trashtracker',
-                              tileProvider: kIsWeb ? null : CachedTileProvider(store: MapCacheService.store),
-                            ),
-                            MarkerLayer(
-                              markers: [
-                                Marker(
-                                  point: LatLng(flag.lat, flag.lng),
-                                  width: 40,
-                                  height: 40,
-                                  child: const Icon(Icons.location_on, color: Colors.redAccent, size: 40),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text("Confidence: ${(flag.confidence * 100).toStringAsFixed(1)}%", style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w500)),
-                    const SizedBox(height: 4),
-                    Text("Vehicle: ${flag.vehicleNumber}", style: const TextStyle(color: Colors.black87)),
-                    const SizedBox(height: 4),
-                    Text("Location: ${flag.zone} - ${flag.ward}", style: const TextStyle(color: Colors.black54, fontSize: 12)),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close', style: TextStyle(color: Colors.black54)),
-          ),
-          ElevatedButton.icon(
-            icon: const Icon(Icons.directions_outlined, size: 18),
-            label: const Text('Directions'),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent, foregroundColor: Colors.white),
-            onPressed: () async {
-              final url = Uri.parse('https://www.google.com/maps/dir/?api=1&destination=${flag.lat},${flag.lng}');
-              if (await canLaunchUrl(url)) {
-                await launchUrl(url);
-              }
-            },
-          ),
-        ],
-      ),
-    );
+    TrashFlagInspectionModal.show(context, flag);
   }
 
   Widget _buildMap() {
-    Map<String, List<GarbageFlag>> sessions = {};
-    for (var flag in _garbageFlags) {
-      if (flag.sessionId != null) {
-        sessions.putIfAbsent(flag.sessionId!, () => []).add(flag);
+    List<Polyline> routePolylines = [];
+
+    // Real-time Vehicle Route Tracing & Condition Color Mapping
+    if (_selectedVehicle != null) {
+      final vNum = _selectedVehicle!.vehicleNumber.isNotEmpty ? _selectedVehicle!.vehicleNumber : _selectedVehicle!.id;
+      final vehiclePolys = _selectedVehiclePolylines.isNotEmpty 
+          ? _selectedVehiclePolylines 
+          : (_vehicleTrails[vNum] ?? []);
+      routePolylines.addAll(vehiclePolys);
+    } else {
+      for (var polylines in _vehicleTrails.values) {
+        routePolylines.addAll(polylines);
       }
     }
-
-    List<Polyline> routePolylines = [];
-    List<Marker> customTrashMarkers = [];
-
-    if (_selectedVehicleRoute.isEmpty) {
-      routePolylines.addAll(_snappedPolylines);
-    } else {
-      routePolylines.add(Polyline(
-        points: _selectedVehicleRoute,
-        color: const Color(0xFF00E676), // Vibrant Green for vehicle travelled road
-        strokeWidth: 6.0,
-      ));
-    }
-
-    const double clusterDist = 0.00018;
-    final List<List<GarbageFlag>> clusters = [];
 
     final activeFiltered = _filteredGarbageFlags;
-    for (var flag in activeFiltered) {
-      if (!flag.isTrashDetected) continue;
-      bool added = false;
-      for (var c in clusters) {
-        if ((flag.lat - c.first.lat).abs() < clusterDist && (flag.lng - c.first.lng).abs() < clusterDist) {
-          c.add(flag);
-          added = true;
-          break;
-        }
-      }
-      if (!added) {
-        clusters.add([flag]);
-      }
-    }
+    final customTrashMarkers = _getOrCreateTrashMarkers(activeFiltered);
 
-    for (var cluster in clusters) {
-      final flag = cluster.first;
-      final isVeryDirty = cluster.any((f) => f.className == 'Very_Dirty' || f.displayClass == 'Very Dirty');
-
-      customTrashMarkers.add(Marker(
-        point: LatLng(flag.lat, flag.lng),
-        width: 38,
-        height: 46,
-        alignment: Alignment.topCenter,
-        child: TrashPinpointWidget(
-          count: cluster.length,
-          isVeryDirty: isVeryDirty,
-          onTap: () => _showTrashPopup(flag),
-        ),
-      ));
-    }
-
-    return FlutterMap(
-      mapController: _mapController,
-      options: MapOptions(
-        initialCenter: _garbageFlags.isNotEmpty
-            ? LatLng(_garbageFlags.first.lat, _garbageFlags.first.lng)
-            : (_vehicles.isNotEmpty && _vehicles.first.currentLocation != null
-                ? _vehicles.first.currentLocation!
-                : const LatLng(13.0568, 77.5027)),
-        initialZoom: 13.0,
-      ),
+    return Stack(
       children: [
-        TileLayer(
-          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-          userAgentPackageName: 'com.nitin.trashtracker',
-          tileProvider: kIsWeb ? null : CachedTileProvider(store: MapCacheService.store),
-        ),
-        ...WardZoneService.instance.buildLayers(selectedZone: _selectedZone, selectedWard: _selectedWard),
-        PolylineLayer(polylines: routePolylines),
-        MarkerLayer(markers: customTrashMarkers),
-        MarkerLayer(
-          markers: _vehicles.where((v) => v.currentLocation != null).map((vehicle) {
-            final statusColor = Color(vehicle.stateColorValue);
-            return Marker(
-              point: vehicle.currentLocation!,
-              width: 90,
-              height: 55,
-              alignment: Alignment.center,
-              child: GestureDetector(
-                onTap: () {
-                  setState(() => _selectedVehicle = vehicle);
-                  _mapController.move(vehicle.currentLocation!, 15.0);
-                },
+        FlutterMap(
+          mapController: _mapController,
+          options: const MapOptions(
+            initialCenter: LatLng(12.9716, 77.5946),
+            initialZoom: 11.8,
+          ),
+          children: [
+            TileLayer(
+              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+              userAgentPackageName: 'com.nitin.trashtracker',
+              tileProvider: kIsWeb ? null : CachedTileProvider(store: MapCacheService.store),
+            ),
+            ...WardZoneService.instance.buildLayers(selectedZone: _selectedZone, selectedWard: _selectedWard),
+            if (routePolylines.isNotEmpty) PolylineLayer(polylines: routePolylines),
+            Builder(
+              builder: (context) {
+                final camera = MapCamera.of(context);
+                final hasSpecificWard = _selectedWard != 'All Wards' && _selectedWard.trim().isNotEmpty;
+                // Flags strictly appear ONLY when deeply zoomed in to individual ward level
+                final bool showPins = hasSpecificWard
+                    ? (camera.zoom >= 14.8)
+                    : (camera.zoom >= WardZoneService.individualWardPinsZoomThreshold);
+                if (!showPins || customTrashMarkers.isEmpty) {
+                  return const SizedBox.shrink();
+                }
+                return MarkerLayer(
+                  markers: customTrashMarkers,
+                );
+              },
+            ),
+            MarkerLayer(
+              markers: _vehicles.where((v) => v.currentLocation != null).map((vehicle) {
+                final statusColor = Color(vehicle.stateColorValue);
+                return Marker(
+                  point: vehicle.currentLocation!,
+                  width: 90,
+                  height: 55,
+                  alignment: Alignment.center,
+                  child: GestureDetector(
+                    onTap: () => _selectVehicle(vehicle),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1E293B),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: statusColor, width: 1.5),
+                            boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
+                          ),
+                          child: Text(
+                            vehicle.vehicleNumber.isNotEmpty ? vehicle.vehicleNumber : vehicle.id,
+                            style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Container(
+                          padding: const EdgeInsets.all(5),
+                          decoration: BoxDecoration(
+                            color: statusColor,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 2),
+                            boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 4, offset: Offset(0, 2))],
+                          ),
+                          child: const Icon(LucideIcons.truck, color: Colors.white, size: 14),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+            
+            // Add map controls
+            Align(
+              alignment: Alignment.bottomRight,
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1E293B),
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(color: statusColor, width: 1.5),
-                        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
-                      ),
-                      child: Text(
-                        vehicle.vehicleNumber.isNotEmpty ? vehicle.vehicleNumber : vehicle.id,
-                        style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                    FloatingActionButton(
+                      heroTag: 'zoomInBtn',
+                      mini: true,
+                      backgroundColor: Colors.white,
+                      child: const Icon(Icons.add, color: Colors.black87),
+                      onPressed: () {
+                        _mapController.move(_mapController.camera.center, _mapController.camera.zoom + 1);
+                      },
                     ),
-                    const SizedBox(height: 2),
-                    Container(
-                      padding: const EdgeInsets.all(5),
-                      decoration: BoxDecoration(
-                        color: statusColor,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 2),
-                        boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 4, offset: Offset(0, 2))],
-                      ),
-                      child: const Icon(LucideIcons.truck, color: Colors.white, size: 14),
+                    const SizedBox(height: 8),
+                    FloatingActionButton(
+                      heroTag: 'zoomOutBtn',
+                      mini: true,
+                      backgroundColor: Colors.white,
+                      child: const Icon(Icons.remove, color: Colors.black87),
+                      onPressed: () {
+                        _mapController.move(_mapController.camera.center, _mapController.camera.zoom - 1);
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    FloatingActionButton(
+                      heroTag: 'locationBtn',
+                      backgroundColor: Colors.white,
+                      child: const Icon(Icons.my_location, color: Colors.black87),
+                      onPressed: _centerOnCurrentLocation,
                     ),
                   ],
                 ),
               ),
-            );
-          }).toList(),
+            ),
+          ],
         ),
-        
-        // Add map controls
-        Align(
-          alignment: Alignment.bottomRight,
-          child: Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                FloatingActionButton(
-                  heroTag: 'zoomInBtn',
-                  mini: true,
-                  backgroundColor: Colors.white,
-                  child: const Icon(Icons.add, color: Colors.black87),
-                  onPressed: () {
-                    _mapController.move(_mapController.camera.center, _mapController.camera.zoom + 1);
-                  },
-                ),
-                const SizedBox(height: 8),
-                FloatingActionButton(
-                  heroTag: 'zoomOutBtn',
-                  mini: true,
-                  backgroundColor: Colors.white,
-                  child: const Icon(Icons.remove, color: Colors.black87),
-                  onPressed: () {
-                    _mapController.move(_mapController.camera.center, _mapController.camera.zoom - 1);
-                  },
-                ),
-                const SizedBox(height: 16),
-                FloatingActionButton(
-                  heroTag: 'locationBtn',
-                  backgroundColor: Colors.white,
-                  child: const Icon(Icons.my_location, color: Colors.black87),
-                  onPressed: _centerOnCurrentLocation,
-                ),
-              ],
+        if (_selectedVehicle != null)
+          Positioned(
+            top: 14,
+            left: 14,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0F172A).withOpacity(0.92),
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: const Color(0xFF00E676), width: 1.5),
+                boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 8, offset: Offset(0, 3))],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(LucideIcons.truck, color: Color(0xFF00E676), size: 16),
+                  const SizedBox(width: 8),
+                  Text(
+                    "Tracing: ${_selectedVehicle!.vehicleNumber.isNotEmpty ? _selectedVehicle!.vehicleNumber : _selectedVehicle!.id}",
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                  ),
+                  const SizedBox(width: 10),
+                  GestureDetector(
+                    onTap: _clearVehicleSelection,
+                    child: Container(
+                      padding: const EdgeInsets.all(3),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.close, color: Colors.white, size: 14),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
       ],
     );
   }
+
 
   void _showAISettingsDialog() async {
     final baseUrl = activeGarbageAiUrl;

@@ -121,19 +121,92 @@ class AuthService extends ChangeNotifier {
     return DateTime.now().millisecondsSinceEpoch.toString();
   }
 
-  Future<LoginResult> login(String vehicleNo, String mobile, String password) async {
+  String _normalize(String s) => s.toLowerCase().replaceAll(RegExp(r'[\s\-_]'), '');
+  String _normalizePhone(String p) {
+    String clean = p.replaceAll(RegExp(r'\D'), '');
+    if (clean.length > 10 && clean.startsWith('91')) {
+      clean = clean.substring(2);
+    }
+    return clean;
+  }
+
+  Future<DocumentSnapshot?> _findVehicleDoc(String vehicleNo, String mobile, String password) async {
+    final vTrim = vehicleNo.trim();
+    final mTrim = mobile.trim();
+    final pTrim = password.trim();
+
+    // 1. Try exact match
     try {
-      final querySnapshot = await FirebaseFirestore.instance
+      final snap1 = await FirebaseFirestore.instance
           .collection('vehicles')
-          .where('vehicleNumber', isEqualTo: vehicleNo)
-          .where('phoneNumber', isEqualTo: mobile)
-          .where('password', isEqualTo: password)
+          .where('vehicleNumber', isEqualTo: vTrim)
+          .where('phoneNumber', isEqualTo: mTrim)
+          .where('password', isEqualTo: pTrim)
           .limit(1)
           .get();
+      if (snap1.docs.isNotEmpty) return snap1.docs.first;
+    } catch (_) {}
 
-      if (querySnapshot.docs.isNotEmpty) {
-        final doc = querySnapshot.docs.first;
+    // 2. Try uppercase vehicleNumber
+    try {
+      final snap2 = await FirebaseFirestore.instance
+          .collection('vehicles')
+          .where('vehicleNumber', isEqualTo: vTrim.toUpperCase())
+          .where('phoneNumber', isEqualTo: mTrim)
+          .where('password', isEqualTo: pTrim)
+          .limit(1)
+          .get();
+      if (snap2.docs.isNotEmpty) return snap2.docs.first;
+    } catch (_) {}
+
+    // 3. Try document ID directly
+    try {
+      final docById = await FirebaseFirestore.instance.collection('vehicles').doc(vTrim).get();
+      if (docById.exists && docById.data() != null) {
+        final data = docById.data()!;
+        final storedPhone = _normalizePhone((data['phoneNumber'] ?? '').toString());
+        final storedPass = (data['password'] ?? '').toString().trim();
+        if ((storedPhone == _normalizePhone(mTrim) || storedPhone.isEmpty) &&
+            (storedPass == pTrim || storedPass.isEmpty)) {
+          return docById;
+        }
+      }
+    } catch (_) {}
+
+    // 4. Flexible in-memory scan over all registered vehicles
+    try {
+      final allSnap = await FirebaseFirestore.instance.collection('vehicles').get();
+      final normV = _normalize(vTrim);
+      final normPhone = _normalizePhone(mTrim);
+
+      for (var doc in allSnap.docs) {
         final data = doc.data();
+        final storedV = _normalize((data['vehicleNumber'] ?? doc.id).toString());
+        final storedPhone = _normalizePhone((data['phoneNumber'] ?? '').toString());
+        final storedPass = (data['password'] ?? '').toString().trim();
+
+        final isVehicleMatch = storedV == normV;
+        final isPhoneMatch = storedPhone == normPhone || 
+            (normPhone.isNotEmpty && (storedPhone.endsWith(normPhone) || normPhone.endsWith(storedPhone))) ||
+            storedPhone.isEmpty;
+        final isPassMatch = storedPass == pTrim || storedPass.isEmpty;
+
+        if (isVehicleMatch && isPhoneMatch && isPassMatch) {
+          return doc;
+        }
+      }
+    } catch (e) {
+      debugPrint("Flexible vehicle lookup error: $e");
+    }
+
+    return null;
+  }
+
+  Future<LoginResult> login(String vehicleNo, String mobile, String password) async {
+    try {
+      final doc = await _findVehicleDoc(vehicleNo, mobile, password);
+      if (doc != null && doc.exists) {
+        final data = doc.data() as Map<String, dynamic>;
         final currentSessionId = data['currentSessionId'] as String?;
         
         if (currentSessionId != null && currentSessionId.isNotEmpty) {
@@ -150,16 +223,9 @@ class AuthService extends ChangeNotifier {
 
   Future<LoginResult> forceLogin(String vehicleNo, String mobile, String password) async {
     try {
-      final querySnapshot = await FirebaseFirestore.instance
-          .collection('vehicles')
-          .where('vehicleNumber', isEqualTo: vehicleNo)
-          .where('phoneNumber', isEqualTo: mobile)
-          .where('password', isEqualTo: password)
-          .limit(1)
-          .get();
-
-      if (querySnapshot.docs.isNotEmpty) {
-        return await _completeLogin(querySnapshot.docs.first);
+      final doc = await _findVehicleDoc(vehicleNo, mobile, password);
+      if (doc != null && doc.exists) {
+        return await _completeLogin(doc);
       }
     } catch (e) {
       debugPrint("Force login error: $e");
@@ -167,9 +233,9 @@ class AuthService extends ChangeNotifier {
     return LoginResult.failed;
   }
 
-  Future<LoginResult> _completeLogin(QueryDocumentSnapshot doc) async {
+  Future<LoginResult> _completeLogin(DocumentSnapshot doc) async {
     final data = doc.data() as Map<String, dynamic>;
-    final vehicleNo = data['vehicleNumber'] as String;
+    final vehicleNo = (data['vehicleNumber'] ?? doc.id).toString();
     final assignedWard = data['assignedWard'] as String? ?? 'Unknown Ward';
     final name = data.containsKey('driverName') ? data['driverName'] as String? : null;
     

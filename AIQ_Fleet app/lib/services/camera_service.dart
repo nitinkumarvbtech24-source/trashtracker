@@ -13,6 +13,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:gal/gal.dart';
 import 'database_service.dart';
 import 'telemetry_service.dart';
+import 'package:latlong2/latlong.dart';
+import 'ward_zone_service.dart';
 import '../constants.dart';
 import 'wake_manager.dart';
 
@@ -49,6 +51,7 @@ class CameraService extends ChangeNotifier {
   Map<String, dynamic>? latestResult;
   String _latestHealthStatus = 'UNKNOWN';
   String get latestRoadStatus => _latestGarbageStatus;
+  String get latestHealthStatus => _latestHealthStatus;
 
   // Offline Queue State (Sequential Delivery)
   int _pendingQueueCount = 0;
@@ -58,6 +61,7 @@ class CameraService extends ChangeNotifier {
   String _queueStatusMessage = 'Idle';
   String get queueStatusMessage => _queueStatusMessage;
   Timer? _queueWorkerTimer;
+  bool _isTakingSnapshot = false;
 
   Future<void> refreshPendingQueueCount() async {
     try {
@@ -522,11 +526,15 @@ class CameraService extends ChangeNotifier {
       );
 
       await _controller!.initialize();
-      try {
-        _minZoomLevel = await _controller!.getMinZoomLevel();
-        _maxZoomLevel = await _controller!.getMaxZoomLevel();
-      } catch (e) {
-        debugPrint("Zoom level fetching failed, setting defaults: $e");
+      if (!kIsWeb) {
+        try {
+          _minZoomLevel = await _controller!.getMinZoomLevel();
+          _maxZoomLevel = await _controller!.getMaxZoomLevel();
+        } catch (_) {
+          _minZoomLevel = 1.0;
+          _maxZoomLevel = 1.0;
+        }
+      } else {
         _minZoomLevel = 1.0;
         _maxZoomLevel = 1.0;
       }
@@ -547,7 +555,7 @@ class CameraService extends ChangeNotifier {
 
   Future<void> _checkHealth() async {
     try {
-      final resG = await http.get(Uri.parse('$activeGarbageAiUrl/api/snapshots'), headers: {'ngrok-skip-browser-warning': 'true'}).timeout(const Duration(seconds: 3));
+      final resG = await http.get(Uri.parse('$activeGarbageAiUrl/api/health'), headers: {'ngrok-skip-browser-warning': 'true'}).timeout(const Duration(seconds: 4));
       final tunnelUp = true;
       final backendUp = resG.statusCode == 200;
       if (_isGarbageTunnelConnected != tunnelUp || _isGarbageBackendConnected != backendUp) {
@@ -564,10 +572,20 @@ class CameraService extends ChangeNotifier {
         }
       }
     } catch (e) {
-      if (_isGarbageTunnelConnected || _isGarbageBackendConnected) {
-        _isGarbageTunnelConnected = false;
-        _isGarbageBackendConnected = false;
-        notifyListeners();
+      try {
+        final resFallback = await http.get(Uri.parse(activeGarbageAiUrl), headers: {'ngrok-skip-browser-warning': 'true'}).timeout(const Duration(seconds: 4));
+        final backendUp = resFallback.statusCode == 200 || resFallback.statusCode == 404;
+        if (_isGarbageTunnelConnected != backendUp || _isGarbageBackendConnected != backendUp) {
+          _isGarbageTunnelConnected = backendUp;
+          _isGarbageBackendConnected = backendUp;
+          notifyListeners();
+        }
+      } catch (_) {
+        if (_isGarbageTunnelConnected || _isGarbageBackendConnected) {
+          _isGarbageTunnelConnected = false;
+          _isGarbageBackendConnected = false;
+          notifyListeners();
+        }
       }
     }
     
@@ -638,6 +656,11 @@ class CameraService extends ChangeNotifier {
   }
 
   Future<Map<String, dynamic>?> captureManualSnapshot(double lat, double lng, {String? sessionId, String? pointType}) async {
+    if (_isTakingSnapshot) {
+      debugPrint("⚠️ Snapshot already in progress, skipping duplicate call.");
+      return latestResult;
+    }
+    _isTakingSnapshot = true;
     try {
       if (_controller == null || !_controller!.value.isInitialized) return null;
       
@@ -652,18 +675,32 @@ class CameraService extends ChangeNotifier {
       String calculatedWard = 'Unknown Ward';
       String calculatedZone = 'Unknown Zone';
       
-      for (var w in _cachedWards) {
-        if (_isPointInPolygon(lat, lng, w['boundary'])) {
-          calculatedWard = w['name'];
-          break;
+      final pt = LatLng(lat, lng);
+      final foundWard = WardZoneService.instance.findWardForPoint(pt);
+      final foundZone = WardZoneService.instance.findZoneForPoint(pt);
+      if (foundWard != null) {
+        calculatedWard = foundWard.name;
+        calculatedZone = foundWard.zone ?? foundZone?.name ?? 'Unknown Zone';
+      } else if (foundZone != null) {
+        calculatedZone = foundZone.name;
+      }
+
+      if (calculatedWard == 'Unknown Ward') {
+        for (var w in _cachedWards) {
+          if (_isPointInPolygon(lat, lng, w['boundary'])) {
+            calculatedWard = w['name'];
+            break;
+          }
         }
       }
       if (calculatedWard == 'Unknown Ward') calculatedWard = assignedWard;
       
-      for (var z in _cachedZones) {
-        if (_isPointInPolygon(lat, lng, z['boundary'])) {
-          calculatedZone = z['name'];
-          break;
+      if (calculatedZone == 'Unknown Zone') {
+        for (var z in _cachedZones) {
+          if (_isPointInPolygon(lat, lng, z['boundary'])) {
+            calculatedZone = z['name'];
+            break;
+          }
         }
       }
 
@@ -750,6 +787,8 @@ class CameraService extends ChangeNotifier {
     } catch (e) {
       debugPrint("Error taking snapshot: $e");
       return null;
+    } finally {
+      _isTakingSnapshot = false;
     }
   }
 
@@ -937,6 +976,13 @@ class CameraService extends ChangeNotifier {
     String? sessionId,
     String? pointType,
   ) async {
+    // PREVENT DUPLICATES: If HEALTH_AI_URL is empty or points to the same Garbage AI server,
+    // do NOT re-post the frame to Garbage AI!
+    if (HEALTH_AI_URL.isEmpty ||
+        HEALTH_AI_URL == activeGarbageAiUrl ||
+        HEALTH_AI_URL == CLOUDFLARE_URL) {
+      return;
+    }
     try {
       final healthResponse = await http.post(
         Uri.parse('$HEALTH_AI_URL/process_frame'),

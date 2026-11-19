@@ -1,11 +1,20 @@
-// Replace localhost with your computer's IP address (e.g. 192.168.1.5) 
-// if you are running the app on a physical phone on the same WiFi network.
-String GARBAGE_AI_URL = "https://pointer-staff-prodigy.ngrok-free.dev";
+// Cloudflare Tunnel URL providing unlimited bandwidth and auto-reconnection
+String CLOUDFLARE_URL = "https://amounts-middle-while-monroe.trycloudflare.com";
+
+String GARBAGE_AI_URL = CLOUDFLARE_URL;
 String GARBAGE_AI_V2_URL = "https://pointer-staff-prodigy-v2.ngrok-free.dev";
 String GARBAGE_AI_V3_URL = "https://pointer-staff-prodigy-v3.ngrok-free.dev";
 String GARBAGE_AI_V5_URL = "https://pointer-staff-prodigy.ngrok-free.dev";
-String GARBAGE_AI_V7_URL = "https://pointer-staff-prodigy.ngrok-free.dev";
+String GARBAGE_AI_V7_URL = CLOUDFLARE_URL;
 int MODEL_VERSION = 7;
+
+void updateBackendUrl(String newUrl) {
+  if (newUrl.isEmpty) return;
+  CLOUDFLARE_URL = newUrl;
+  GARBAGE_AI_URL = newUrl;
+  GARBAGE_AI_V7_URL = newUrl;
+  HEALTH_AI_URL = newUrl;
+}
 
 String get activeGarbageAiUrl {
   if (MODEL_VERSION == 7) return GARBAGE_AI_V7_URL;
@@ -15,4 +24,4 @@ String get activeGarbageAiUrl {
   return GARBAGE_AI_URL;
 }
 
-String HEALTH_AI_URL = "https://disprove-chop-regalia.ngrok-free.dev"; // Enter the Cloudflare/Pinggy URL here
+String HEALTH_AI_URL = CLOUDFLARE_URL;

@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'package:upgrader/upgrader.dart';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:responsive_framework/responsive_framework.dart';
 import 'screens/main_layout.dart';
 import 'screens/login_screen.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/map_cache_service.dart';
@@ -28,7 +29,11 @@ void main() async {
   final prefs = await SharedPreferences.getInstance();
   final savedUrl = prefs.getString('garbage_ai_url');
   if (savedUrl != null && savedUrl.isNotEmpty) {
-    GARBAGE_AI_URL = savedUrl;
+    if (savedUrl.contains("ngrok") || savedUrl.contains("knowledgestorm")) {
+      await prefs.remove("garbage_ai_url");
+    } else {
+      GARBAGE_AI_URL = savedUrl;
+    }
   }
   final savedUrlV2 = prefs.getString('garbage_ai_v2_url');
   if (savedUrlV2 != null && savedUrlV2.isNotEmpty) {
@@ -48,9 +53,34 @@ void main() async {
   }
   final savedUrlV7 = prefs.getString('garbage_ai_v7_url');
   if (savedUrlV7 != null && savedUrlV7.isNotEmpty) {
-    GARBAGE_AI_V7_URL = savedUrlV7;
+    if (savedUrlV7.contains('pointer-staff-prodigy') ||
+        savedUrlV7.contains('ngrok') ||
+        savedUrlV7.contains('knowledgestorm') ||
+        savedUrlV7.contains('copper-labs') ||
+        savedUrlV7.contains('frankfurt-tour')) {
+      await prefs.remove('garbage_ai_v7_url');
+    } else {
+      updateBackendUrl(savedUrlV7);
+    }
   }
   MODEL_VERSION = 7; // Set to V7
+
+  // Real-time Firestore sync: Any phone or web app instantly auto-syncs with live Cloudflare tunnel
+  try {
+    FirebaseFirestore.instance.collection('settings').doc('server_config').snapshots().listen((doc) {
+      if (doc.exists && doc.data() != null) {
+        final remoteUrl = doc.data()!['active_backend_url'] as String?;
+        if (remoteUrl != null && remoteUrl.isNotEmpty && remoteUrl.startsWith('http')) {
+          updateBackendUrl(remoteUrl);
+          debugPrint('🌐 [Auto-Sync] Live Backend URL synced from Firestore: $remoteUrl');
+        }
+      }
+    }, onError: (e) {
+      debugPrint('Firestore server_config sync error: $e');
+    });
+  } catch (e) {
+    debugPrint('Failed to attach server_config listener: $e');
+  }
 
 
   runApp(const StreetAIQApp());
@@ -94,14 +124,16 @@ class StreetAIQApp extends StatelessWidget {
           Theme.of(context).textTheme.apply(bodyColor: Colors.white, displayColor: Colors.white),
         ),
       ),
-      home: UpgradeAlert(
-        upgrader: Upgrader(
-          storeController: UpgraderStoreController(
-            onAndroid: () => UpgraderAppcastStore(appcastURL: appcastURL),
-          ),
-        ),
-        child: const AppRoot(),
-      ),
+      home: kIsWeb
+          ? const AppRoot()
+          : UpgradeAlert(
+              upgrader: Upgrader(
+                storeController: UpgraderStoreController(
+                  onAndroid: () => UpgraderAppcastStore(appcastURL: appcastURL),
+                ),
+              ),
+              child: const AppRoot(),
+            ),
     );
   }
 }

@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'database_service.dart';
 import 'camera_service.dart';
+import '../constants.dart';
 
 class SyncService extends ChangeNotifier {
   static final SyncService _instance = SyncService._internal();
@@ -35,7 +36,7 @@ class SyncService extends ChangeNotifier {
       }
 
       final prefs = await SharedPreferences.getInstance();
-      final backendUrl = prefs.getString('backendUrl') ?? 'https://frankfurt-tour-chef-antibody.trycloudflare.com';
+      final backendUrl = prefs.getString('backendUrl') ?? activeGarbageAiUrl;
       final vehicleId = prefs.getString('vehicleId') ?? 'V001';
 
       // 1. Sync Telemetry

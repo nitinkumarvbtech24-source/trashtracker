@@ -18,6 +18,8 @@ import '../constants.dart';
 import '../widgets/trash_pinpoint_marker.dart';
 import '../services/ward_zone_service.dart';
 import '../services/trash_spots_service.dart';
+import '../widgets/trash_flag_inspection_modal.dart';
+import '../services/authority_directory_service.dart';
 
 class GarbageSpotsScreen extends StatefulWidget {
   const GarbageSpotsScreen({super.key});
@@ -54,6 +56,30 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
 
   void _onWardZoneUpdate() {
     if (mounted) setState(() {});
+  }
+
+  void _zoomToSelection() {
+    if (_filterWard != 'All Wards') {
+      try {
+        final matches = WardZoneService.instance.wards.where((w) => w.name.trim().toLowerCase() == _filterWard.trim().toLowerCase());
+        if (matches.isNotEmpty && matches.first.boundary.isNotEmpty) {
+          final centroid = WardZoneService.computeCentroid(matches.first.boundary);
+          _mapController.move(centroid, 15.2);
+          return;
+        }
+      } catch (_) {}
+    } else if (_filterZone != 'All Zones') {
+      try {
+        final matches = WardZoneService.instance.zones.where((z) => z.name.trim().toLowerCase() == _filterZone.trim().toLowerCase());
+        if (matches.isNotEmpty && matches.first.boundary.isNotEmpty) {
+          final centroid = WardZoneService.computeCentroid(matches.first.boundary);
+          _mapController.move(centroid, 12.5);
+          return;
+        }
+      } catch (_) {}
+    } else {
+      _mapController.move(const LatLng(12.9716, 77.5946), 11.8);
+    }
   }
 
   @override
@@ -337,11 +363,17 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
                 ),
                 const SizedBox(width: 12),
                 _buildDropdownFilter(validSelectedZone, zonesList, (val) {
-                  if (val != null) setState(() => _filterZone = val);
+                  if (val != null) {
+                    setState(() { _filterZone = val; _filterWard = 'All Wards'; });
+                    _zoomToSelection();
+                  }
                 }),
                 const SizedBox(width: 12),
                 _buildDropdownFilter(validSelectedWard, wardsList, (val) {
-                  if (val != null) setState(() => _filterWard = val);
+                  if (val != null) {
+                    setState(() => _filterWard = val);
+                    _zoomToSelection();
+                  }
                 }),
                 const SizedBox(width: 12),
                 _buildDropdownFilter(_filterSeverity, ['All Severity', 'High', 'Medium', 'Low'], (val) {
@@ -431,10 +463,8 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
           FlutterMap(
             mapController: _mapController,
             options: MapOptions(
-              initialCenter: flags.isNotEmpty
-                  ? LatLng(flags.first.lat, flags.first.lng)
-                  : const LatLng(13.0568, 77.5027),
-              initialZoom: 13.0,
+              initialCenter: const LatLng(12.9716, 77.5946),
+              initialZoom: 11.8,
               onTap: (_, __) => setState(() => _selectedFlag = null),
             ),
             children: [
@@ -448,6 +478,15 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
               ),
               Builder(
                 builder: (context) {
+                  final camera = MapCamera.of(context);
+                  final hasSpecificWard = _filterWard != 'All Wards' && _filterWard.isNotEmpty;
+                  final bool showPins = hasSpecificWard
+                      ? (camera.zoom >= 14.8)
+                      : (camera.zoom >= WardZoneService.individualWardPinsZoomThreshold);
+                  if (!showPins || flags.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
+
                   const double clusterDist = 0.00018;
                   final List<List<GarbageFlag>> clusters = [];
 
@@ -482,6 +521,7 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
                               _selectedFlag = flag;
                             });
                             _mapController.move(LatLng(flag.lat, flag.lng), 15.0);
+                            TrashFlagInspectionModal.show(context, flag);
                           },
                         ),
                       );
@@ -782,10 +822,10 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
             child: Row(
               children: [
                 GestureDetector(
-                  onTap: () => _showFullImage(flag.imageUrl),
+                  onTap: () => TrashFlagInspectionModal.show(context, flag),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(8),
-                    child: _buildImage(flag.imageUrl, width: 60, height: 48),
+                    child: _buildImage(flag.imageUrl, width: 60, height: 48, seedKey: flag.id),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -793,7 +833,10 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Spot ID: ${flag.id.substring(0, math.min(7, flag.id.length)).toUpperCase()}', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+                      InkWell(
+                        onTap: () => TrashFlagInspectionModal.show(context, flag),
+                        child: Text('Spot ID: ${flag.id.substring(0, math.min(7, flag.id.length)).toUpperCase()}', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+                      ),
                       const SizedBox(height: 4),
                       Row(
                         children: [
@@ -1115,9 +1158,7 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
     );
   }
 
-  Widget _buildImage(String url, {double? width, double? height, BoxFit fit = BoxFit.cover}) {
-    if (url.isEmpty) return _buildImagePlaceholder(width, height);
-    
+  Widget _buildImage(String url, {double? width, double? height, BoxFit fit = BoxFit.cover, String? seedKey}) {
     if (url.startsWith('data:image')) {
       try {
         final base64String = url.split(',').last;
@@ -1133,8 +1174,9 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
       }
     }
     
+    final resolved = AuthorityDirectoryService.instance.resolveImageUrl(url, seedKey);
     return NgrokImage(
-      url: url,
+      url: resolved,
       width: width,
       height: height,
       fit: fit,

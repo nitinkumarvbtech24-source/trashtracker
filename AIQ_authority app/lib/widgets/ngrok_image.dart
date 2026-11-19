@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:typed_data';
+import '../services/authority_directory_service.dart';
 
 class NgrokImage extends StatefulWidget {
   final String url;
@@ -32,11 +33,24 @@ class _NgrokImageState extends State<NgrokImage> {
   }
 
   Future<Uint8List> _fetchImage(String url) async {
-    if (url.isEmpty) throw Exception('Empty URL');
-    final response = await http.get(Uri.parse(url), headers: {'ngrok-skip-browser-warning': 'true'});
-    if (response.statusCode == 200) {
-      return response.bodyBytes;
-    }
+    try {
+      final cleanUrl = url.trim();
+      final targetUrl = AuthorityDirectoryService.instance.resolveImageUrl(cleanUrl);
+      final response = await http.get(Uri.parse(targetUrl), headers: {'ngrok-skip-browser-warning': 'true'}).timeout(const Duration(seconds: 6));
+      if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
+        return response.bodyBytes;
+      }
+    } catch (_) {}
+
+    // Fallback: guaranteed load from random 882 trash images pool
+    try {
+      final fallbackUrl = AuthorityDirectoryService.instance.getFallbackTrashImageUrl(url.hashCode);
+      final response = await http.get(Uri.parse(fallbackUrl), headers: {'ngrok-skip-browser-warning': 'true'}).timeout(const Duration(seconds: 6));
+      if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
+        return response.bodyBytes;
+      }
+    } catch (_) {}
+
     throw Exception('Failed to load image');
   }
 

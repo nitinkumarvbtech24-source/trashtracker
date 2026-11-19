@@ -18,6 +18,7 @@ class TrashSpotsService {
   Timer? _backendPollTimer;
   bool _initialized = false;
   final Set<String> _syncedSnapshotIds = {};
+  bool _isFetchingBackend = false;
 
   void init() {
     if (_initialized) return;
@@ -66,6 +67,8 @@ class TrashSpotsService {
   }
 
   Future<void> _fetchBackendSnapshots() async {
+    if (_isFetchingBackend) return;
+    _isFetchingBackend = true;
     try {
       final url = Uri.parse('$activeGarbageAiUrl/api/snapshots');
       final res = await http.get(url, headers: {'ngrok-skip-browser-warning': 'true'}).timeout(const Duration(seconds: 5));
@@ -105,6 +108,8 @@ class TrashSpotsService {
       }
     } catch (_) {
       // Backend may be offline or URL changed; non-fatal
+    } finally {
+      _isFetchingBackend = false;
     }
   }
 

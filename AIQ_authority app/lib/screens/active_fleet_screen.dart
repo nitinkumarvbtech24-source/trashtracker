@@ -9,9 +9,7 @@ import 'alerts_screen.dart';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:url_launcher/url_launcher.dart';
 
-import '../mock_data.dart';
 import '../services/map_cache_service.dart';
 import '../models/vehicle.dart';
 import '../models/ward.dart';
@@ -22,6 +20,7 @@ import 'vehicle_details_screen.dart';
 import '../services/ward_zone_service.dart';
 import '../services/trash_spots_service.dart';
 import '../widgets/trash_pinpoint_marker.dart';
+import '../widgets/trash_flag_inspection_modal.dart';
 
 class ActiveFleetScreen extends StatefulWidget {
   const ActiveFleetScreen({super.key});
@@ -69,6 +68,40 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
 
   void _onTrashSpotsUpdated() {
     if (mounted) setState(() {});
+  }
+
+  void _updateMapForSelection() {
+    List<LatLng> points = [];
+    if (_selectedWardFilter != 'All Wards') {
+      try {
+        final ward = _wards.firstWhere((w) => w.name == _selectedWardFilter);
+        if (ward.boundary.isNotEmpty) points.addAll(ward.boundary);
+      } catch (_) {}
+    } else if (_selectedZoneFilter != 'All Zones') {
+      try {
+        final zone = _zones.firstWhere((z) => z.name == _selectedZoneFilter);
+        if (zone.boundary.isNotEmpty) points.addAll(zone.boundary);
+      } catch (_) {}
+    }
+
+    if (points.isNotEmpty) {
+      double minLat = points.first.latitude, maxLat = points.first.latitude;
+      double minLng = points.first.longitude, maxLng = points.first.longitude;
+      for (var p in points) {
+        if (p.latitude < minLat) minLat = p.latitude;
+        if (p.latitude > maxLat) maxLat = p.latitude;
+        if (p.longitude < minLng) minLng = p.longitude;
+        if (p.longitude > maxLng) maxLng = p.longitude;
+      }
+      final centerLat = (minLat + maxLat) / 2;
+      final centerLng = (minLng + maxLng) / 2;
+      final double targetZoom = (_selectedWardFilter != 'All Wards')
+          ? 15.2
+          : ((_selectedZoneFilter != 'All Zones') ? 12.5 : 11.8);
+      _mapController.move(LatLng(centerLat, centerLng), targetZoom);
+    } else {
+      _mapController.move(const LatLng(12.9716, 77.5946), 11.8);
+    }
   }
 
   void _fetchDataFromFirestore() {
@@ -369,9 +402,9 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
                       ),
                     ),
                     const SizedBox(width: 16),
-                    _buildDropdown('Zone', validSelectedZone, zonesList, (val) => setState(() { _selectedZoneFilter = val!; _selectedWardFilter = 'All Wards'; })),
+                    _buildDropdown('Zone', validSelectedZone, zonesList, (val) => setState(() { _selectedZoneFilter = val!; _selectedWardFilter = 'All Wards'; _updateMapForSelection(); })),
                     const SizedBox(width: 16),
-                    _buildDropdown('Ward', validSelectedWard, wardsList, (val) => setState(() => _selectedWardFilter = val!)),
+                    _buildDropdown('Ward', validSelectedWard, wardsList, (val) => setState(() { _selectedWardFilter = val!; _updateMapForSelection(); })),
                     const SizedBox(width: 24),
                     _buildDropdown('', _selectedStatusFilter, ['All Status', 'Active', 'Idle', 'Inactive'], (val) => setState(() => _selectedStatusFilter = val!)),
                     const SizedBox(width: 16),
@@ -720,9 +753,9 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
   Widget _buildMap(List<Vehicle> filteredVehicles) {
     return FlutterMap(
       mapController: _mapController,
-      options: MapOptions(
-        initialCenter: mapCenter,
-        initialZoom: mapZoom,
+      options: const MapOptions(
+        initialCenter: LatLng(12.9716, 77.5946),
+        initialZoom: 11.8,
       ),
       children: [
         TileLayer(
@@ -777,7 +810,22 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
               );
             }).toList(),
         ),
-        MarkerLayer(markers: _buildTrashMarkers()),
+        Builder(
+          builder: (context) {
+            final camera = MapCamera.of(context);
+            final hasSpecificWard = (_selectedWard?.name ?? _selectedWardFilter) != 'All Wards' &&
+                (_selectedWard?.name ?? _selectedWardFilter).isNotEmpty;
+            final bool showPins = hasSpecificWard
+                ? (camera.zoom >= 14.8)
+                : (camera.zoom >= WardZoneService.individualWardPinsZoomThreshold);
+            if (!showPins) {
+              return const SizedBox.shrink();
+            }
+            return MarkerLayer(
+              markers: _buildTrashMarkers(),
+            );
+          },
+        ),
       ],
     );
   }
@@ -804,62 +852,6 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
   }
 
   void _showTrashPopup(GarbageFlag flag) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.white,
-        title: Text(
-          '${flag.className.replaceAll('_', ' ')} - ${flag.displayClass}',
-          style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
-        ),
-        content: SizedBox(
-          width: 450,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Image.network(
-                  flag.imageUrl,
-                  headers: const {"ngrok-skip-browser-warning": "true"},
-                  height: 220,
-                  width: double.infinity,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => Container(
-                    height: 200,
-                    color: Colors.grey.shade200,
-                    child: const Center(child: Icon(Icons.broken_image, size: 40, color: Colors.grey)),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text("Confidence: ${(flag.confidence * 100).toStringAsFixed(1)}%", style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 4),
-              Text("Vehicle: ${flag.vehicleNumber}", style: const TextStyle(color: Colors.black87)),
-              const SizedBox(height: 4),
-              Text("Location: ${flag.zone} - ${flag.ward}", style: const TextStyle(color: Colors.black54, fontSize: 12)),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close', style: TextStyle(color: Colors.black54)),
-          ),
-          ElevatedButton.icon(
-            icon: const Icon(Icons.directions_outlined, size: 18),
-            label: const Text('Directions'),
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0F5132), foregroundColor: Colors.white),
-            onPressed: () async {
-              final url = Uri.parse('https://www.google.com/maps/dir/?api=1&destination=${flag.lat},${flag.lng}');
-              if (await canLaunchUrl(url)) {
-                await launchUrl(url);
-              }
-            },
-          ),
-        ],
-      ),
-    );
+    TrashFlagInspectionModal.show(context, flag);
   }
 }

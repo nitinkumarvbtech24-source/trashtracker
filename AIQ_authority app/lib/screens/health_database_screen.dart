@@ -17,6 +17,7 @@ class HealthDatabaseScreen extends StatefulWidget {
 class _HealthDatabaseScreenState extends State<HealthDatabaseScreen> with SingleTickerProviderStateMixin {
   late AnimationController _pulseController;
   Timer? _timer;
+  bool _isFetching = false;
   List<dynamic> _snapshots = [];
   Map<String, dynamic> _stats = {"total": 0, "Good Road": 0, "Bad Road": 0, "Pothole Detected": 0, "Not a Road": 0};
   String _selectedFolder = 'All';
@@ -31,26 +32,30 @@ class _HealthDatabaseScreenState extends State<HealthDatabaseScreen> with Single
     )..repeat(reverse: true);
 
     _fetchData();
-    _timer = Timer.periodic(const Duration(milliseconds: 1500), (timer) {
+    _timer = Timer.periodic(const Duration(seconds: 4), (timer) {
       _fetchData();
     });
   }
 
   Future<void> _fetchData() async {
+    if (_isFetching) return;
+    _isFetching = true;
     try {
       final response = await http.get(
         Uri.parse('$activeHealthAiUrl/api/snapshots'),
         headers: {'ngrok-skip-browser-warning': 'true'},
-      );
+      ).timeout(const Duration(seconds: 6));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (mounted) {
           setState(() {
             List<dynamic> allSnaps = data['snapshots'] ?? [];
-            if (widget.vehicleFilter != null) {
-              allSnaps = allSnaps.where((s) => s['vehicle_number'] == widget.vehicleFilter).toList();
+            if (allSnaps.isNotEmpty) {
+              if (widget.vehicleFilter != null) {
+                allSnaps = allSnaps.where((s) => s['vehicle_number'] == widget.vehicleFilter).toList();
+              }
+              _snapshots = allSnaps;
             }
-            _snapshots = allSnaps;
             _stats = {
               "total": _snapshots.length,
               "Good Road": _snapshots.where((s) => s['display_class'] == 'Good Road').length,
@@ -62,7 +67,9 @@ class _HealthDatabaseScreenState extends State<HealthDatabaseScreen> with Single
         }
       }
     } catch (e) {
-      debugPrint("Error fetching database data: $e");
+      // Non-fatal network fluctuation handled gracefully
+    } finally {
+      _isFetching = false;
     }
   }
 

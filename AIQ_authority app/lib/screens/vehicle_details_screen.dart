@@ -7,7 +7,6 @@ import 'package:lucide_icons/lucide_icons.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../services/map_cache_service.dart';
@@ -20,6 +19,8 @@ import 'database_screen.dart';
 import '../widgets/trash_pinpoint_marker.dart';
 import '../services/ward_zone_service.dart';
 import '../services/trash_spots_service.dart';
+import '../models/trail_segment.dart';
+import '../widgets/trash_flag_inspection_modal.dart';
 
 class VehicleDetailsScreen extends StatefulWidget {
   final Vehicle vehicle;
@@ -133,36 +134,17 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
         if (mounted) {
           setState(() {
             _distanceCoveredKm = (data['distance_km'] ?? 0.0).toDouble();
+            _vehicleTrail = TrailSegment.listFromDailyStats(data);
             if (data['route'] != null) {
               final List<dynamic> rawRoute = data['route'];
               _drivenRoute = rawRoute.map((e) => LatLng((e['lat'] as num).toDouble(), (e['lng'] as num).toDouble())).toList();
-            }
-            if (data['trail'] != null) {
-              final List<dynamic> rawTrail = data['trail'];
-              _vehicleTrail = rawTrail.map((e) {
-                final start = LatLng(
-                  ((e['startLat'] ?? e['start_lat'] ?? 0.0) as num).toDouble(),
-                  ((e['startLng'] ?? e['start_lng'] ?? 0.0) as num).toDouble(),
-                );
-                final end = LatLng(
-                  ((e['endLat'] ?? e['end_lat'] ?? 0.0) as num).toDouble(),
-                  ((e['endLng'] ?? e['end_lng'] ?? 0.0) as num).toDouble(),
-                );
-                final color = Color((e['color'] as num?)?.toInt() ?? 0xFF00E676);
-                return Polyline(
-                  points: [start, end],
-                  color: color,
-                  strokeWidth: 5.0,
-                  borderStrokeWidth: 1.0,
-                  borderColor: Colors.black12,
-                );
-              }).toList();
             }
           });
         }
       }
     });
   }
+
 
   void _onTrashSpotsUpdate() {
     if (mounted) _updateVehicleFlags();
@@ -346,7 +328,7 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
                     padding: const EdgeInsets.all(2),
                     decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(6)),
                     constraints: const BoxConstraints(minWidth: 14, minHeight: 14),
-                    child: const Text('3', style: TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+                    child: Text('${_garbageFlags.length}', style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
                   ),
                 )
               ]
@@ -420,7 +402,13 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
                             Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Text('Last Updated: 10:30 AM', style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF6B7280))),
+                                Builder(builder: (context) {
+                                  final lastTime = _liveVehicle?.lastHeartbeat ?? DateTime.now();
+                                  final hour = lastTime.hour % 12 == 0 ? 12 : lastTime.hour % 12;
+                                  final minute = lastTime.minute.toString().padLeft(2, '0');
+                                  final ampm = lastTime.hour >= 12 ? 'PM' : 'AM';
+                                  return Text('Last Updated: $hour:$minute $ampm', style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF6B7280)));
+                                }),
                                 const SizedBox(width: 4),
                                 const Icon(LucideIcons.refreshCw, size: 10, color: Color(0xFF6B7280)),
                               ],
@@ -451,6 +439,8 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
                                   _buildVehiclePieChart(),
                                   const SizedBox(height: 24),
                                   _buildImageGallery(),
+                                  const SizedBox(height: 24),
+                                  _buildNotificationsPanel(),
                                 ],
                               ),
                             ),
@@ -463,6 +453,8 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
                             _buildVehiclePieChart(),
                             const SizedBox(height: 24),
                             _buildImageGallery(),
+                            const SizedBox(height: 24),
+                            _buildNotificationsPanel(),
                           ],
                         ),
                 ],
@@ -676,7 +668,22 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
     );
   }
 
+  String _formatTimeAgo(String timestampStr) {
+    try {
+      final dt = DateTime.parse(timestampStr);
+      final diff = DateTime.now().difference(dt);
+      if (diff.inMinutes < 1) return 'Just now';
+      if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+      if (diff.inHours < 24) return '${diff.inHours}h ago';
+      return '${diff.inDays}d ago';
+    } catch (_) {
+      return 'Today';
+    }
+  }
+
   Widget _buildNotificationsPanel() {
+    final recentFlags = (_allVehicleFlags.isNotEmpty ? _allVehicleFlags : _garbageFlags).take(4).toList();
+
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -695,16 +702,37 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Column(
-              children: [
-                _buildNotificationItem('Garbage Flag', 'Ward: ${widget.vehicle.assignedWard}', '2 min ago', Colors.red, LucideIcons.trash2),
-                const SizedBox(height: 12),
-                _buildNotificationItem('Pothole Detected', 'Ward: ${widget.vehicle.assignedWard}', '15 min ago', Colors.red, LucideIcons.circle),
-                const SizedBox(height: 12),
-                _buildNotificationItem('Deviation Alert', 'Off assigned route', '1 hr ago', Colors.orange, LucideIcons.alertTriangle),
-                const SizedBox(height: 16),
-              ],
-            ),
+            child: recentFlags.isEmpty
+                ? Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 20),
+                    child: Center(
+                      child: Text(
+                        'No recent flags or notifications for this vehicle',
+                        style: GoogleFonts.inter(color: const Color(0xFF6B7280), fontSize: 12),
+                      ),
+                    ),
+                  )
+                : Column(
+                    children: [
+                      for (int i = 0; i < recentFlags.length; i++) ...[
+                        Builder(builder: (context) {
+                          final flag = recentFlags[i];
+                          final isTrash = flag.isTrashDetected;
+                          final color = isTrash ? Colors.red : Colors.orange;
+                          final icon = isTrash ? LucideIcons.trash2 : LucideIcons.alertTriangle;
+                          final title = flag.displayClass.isNotEmpty ? flag.displayClass : flag.className;
+                          final subtitle = 'Ward: ${flag.ward.isNotEmpty ? flag.ward : widget.vehicle.assignedWard}';
+                          final time = _formatTimeAgo(flag.timestamp);
+                          return GestureDetector(
+                            onTap: () => _showTrashPopup(flag),
+                            child: _buildNotificationItem(title, subtitle, time, color, icon),
+                          );
+                        }),
+                        if (i < recentFlags.length - 1) const SizedBox(height: 12),
+                      ],
+                      const SizedBox(height: 16),
+                    ],
+                  ),
           ),
         ],
       ),
@@ -753,12 +781,7 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
     double cleanVal = _garbageFlags.where((f) => f.className == 'Clean' || f.displayClass == 'Clean' || f.displayClass == 'Clean Road').length.toDouble();
     double slightVal = _garbageFlags.where((f) => f.className == 'Slightly_Dirty' || f.className == 'Trash_Detected' || f.displayClass == 'Trash Detected').length.toDouble();
     double dirtyVal = _garbageFlags.where((f) => f.className == 'Very_Dirty' || f.displayClass == 'Very Dirty' || f.displayClass == 'Very Dirty Road').length.toDouble();
-    double total = _garbageFlags.isEmpty ? 1 : _garbageFlags.length.toDouble();
-    
-    if (cleanVal == 0 && slightVal == 0 && dirtyVal == 0) {
-      cleanVal = 1;
-      total = 1;
-    }
+    double total = cleanVal + slightVal + dirtyVal;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -778,14 +801,23 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
               PieChartData(
                 sectionsSpace: 2,
                 centerSpaceRadius: 40,
-                sections: [
-                  if (cleanVal > 0)
-                    PieChartSectionData(color: Colors.green, value: cleanVal, title: '${((cleanVal / total) * 100).toInt()}%', radius: 40, titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
-                  if (slightVal > 0)
-                    PieChartSectionData(color: Colors.orange, value: slightVal, title: '${((slightVal / total) * 100).toInt()}%', radius: 40, titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
-                  if (dirtyVal > 0)
-                    PieChartSectionData(color: Colors.red, value: dirtyVal, title: '${((dirtyVal / total) * 100).toInt()}%', radius: 40, titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
-                ],
+                sections: total == 0
+                    ? [
+                        PieChartSectionData(
+                          color: Colors.grey.shade200,
+                          value: 1,
+                          showTitle: false,
+                          radius: 36,
+                        ),
+                      ]
+                    : [
+                        if (cleanVal > 0)
+                          PieChartSectionData(color: Colors.green, value: cleanVal, title: '${((cleanVal / total) * 100).toInt()}%', radius: 40, titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
+                        if (slightVal > 0)
+                          PieChartSectionData(color: Colors.orange, value: slightVal, title: '${((slightVal / total) * 100).toInt()}%', radius: 40, titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
+                        if (dirtyVal > 0)
+                          PieChartSectionData(color: Colors.red, value: dirtyVal, title: '${((dirtyVal / total) * 100).toInt()}%', radius: 40, titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
+                      ],
               ),
             ),
           ),
@@ -931,60 +963,10 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
   }
 
   void _showTrashPopup(GarbageFlag flag) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.white,
-        title: Text(
-          '${flag.displayClass} - ${flag.timestamp}',
-          style: GoogleFonts.inter(color: const Color(0xFF111827), fontWeight: FontWeight.bold),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: SizedBox(
-                width: 400,
-                child: NgrokImage(url: flag.imageUrl, height: 200, fit: BoxFit.cover),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Text("Confidence: ${(flag.confidence * 100).toStringAsFixed(1)}%", style: GoogleFonts.inter(color: const Color(0xFF6B7280))),
-            const SizedBox(height: 4),
-            Text("Lat: ${flag.lat.toStringAsFixed(5)}, Lng: ${flag.lng.toStringAsFixed(5)}", style: GoogleFonts.inter(color: const Color(0xFF9CA3AF), fontSize: 12)),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close'),
-          ),
-          ElevatedButton.icon(
-            icon: const Icon(Icons.directions_outlined, size: 18),
-            label: const Text('Navigate'),
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0F5132), foregroundColor: Colors.white),
-            onPressed: () async {
-              final url = Uri.parse('https://www.google.com/maps/dir/?api=1&destination=${flag.lat},${flag.lng}');
-              if (await canLaunchUrl(url)) {
-                await launchUrl(url);
-              }
-            },
-          ),
-        ],
-      ),
-    );
+    TrashFlagInspectionModal.show(context, flag);
   }
 
   Widget _buildMap() {
-    Map<String, List<GarbageFlag>> sessions = {};
-    final flagsSource = _allVehicleFlags.isNotEmpty ? _allVehicleFlags : _garbageFlags;
-    for (var flag in flagsSource) {
-      final key = flag.sessionId ?? (flag.vehicleNumber.isNotEmpty ? flag.vehicleNumber : 'default');
-      sessions.putIfAbsent(key, () => []).add(flag);
-    }
-
     List<Polyline> routePolylines = [];
     
     if (_vehicleTrail.isNotEmpty) {
@@ -1012,47 +994,6 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
       ));
     }
 
-    sessions.forEach((sessionId, list) {
-      list.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-      for (int i = 0; i < list.length - 1; i++) {
-        final start = LatLng(list[i].lat, list[i].lng);
-        final end = LatLng(list[i + 1].lat, list[i + 1].lng);
-        final dist = const Distance().as(LengthUnit.Meter, start, end);
-        if (dist > 60.0) continue; // Never connect distant trash flags
-        final nextFlag = list[i + 1];
-        final status = (nextFlag.displayClass.isNotEmpty ? nextFlag.displayClass : nextFlag.className).toLowerCase();
-        final isNoTrash = status.contains('no trash') || status.contains('no_trash') || status.contains('clean');
-        
-        final isVeryDirty = nextFlag.className == 'Very_Dirty' || 
-                            nextFlag.displayClass == 'Very Dirty' || 
-                            nextFlag.displayClass == 'Very Dirty Road' ||
-                            nextFlag.className.toLowerCase().contains('very_dirty');
-        
-        final isTrash = !isNoTrash && (nextFlag.isTrashDetected ||
-                        nextFlag.className == 'Slightly_Dirty' ||
-                        nextFlag.displayClass == 'Trash Detected' ||
-                        nextFlag.displayClass == 'Slightly Dirty' ||
-                        nextFlag.displayClass == 'Slightly Dirty Road' ||
-                        nextFlag.className == 'trash_detected' ||
-                        nextFlag.trashCount > 0);
-        
-        // Accurate 3-tier road cleanliness color mapping
-        Color segmentColor = const Color(0xFF00E676); // Clean: Vibrant Green (No Trash Detected)
-        if (isVeryDirty) {
-          segmentColor = const Color(0xFFFF1744); // Very Dirty: Vibrant Red
-        } else if (isTrash) {
-          segmentColor = const Color(0xFFFF9100); // Trash Detected: Vibrant Amber/Orange
-        }
-        
-        routePolylines.add(Polyline(
-          points: [start, end],
-          color: segmentColor,
-          strokeWidth: 5.0,
-          borderStrokeWidth: 1.0,
-          borderColor: Colors.black12,
-        ));
-      }
-    });
 
     return Stack(
       children: [

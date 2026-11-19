@@ -924,6 +924,8 @@ class _ComndDeflagScreenState extends State<ComndDeflagScreen> {
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 580),
             child: Card(
+              color: Colors.white,
+              surfaceTintColor: Colors.transparent,
               elevation: 2,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
               child: Padding(

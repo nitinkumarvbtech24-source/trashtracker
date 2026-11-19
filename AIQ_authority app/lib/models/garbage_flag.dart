@@ -1,5 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../constants.dart';
+import '../services/authority_directory_service.dart';
 
 class GarbageFlag {
   final String id;
@@ -96,30 +96,14 @@ class GarbageFlag {
 
   bool get isTrashDetected {
     final s = status.toLowerCase();
-    if (s == 'resolved' || s == 'deflagged') return false;
+    if (s == 'resolved' || s == 'deflagged' || s == 'cleared') return false;
     return isTrashReport;
   }
 
   factory GarbageFlag.fromJson(Map<String, dynamic> json, [String? docId]) {
-    String rawUrl = json['image_url']?.toString() ?? '';
-    String resolvedUrl = '';
-    
-    if (rawUrl.isNotEmpty) {
-      if (rawUrl.startsWith('/')) {
-        resolvedUrl = '$activeGarbageAiUrl$rawUrl';
-      } else if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
-        try {
-          Uri parsed = Uri.parse(rawUrl);
-          if (parsed.path.startsWith('/images/') || parsed.path.startsWith('/snapshots/')) {
-            resolvedUrl = '$activeGarbageAiUrl${parsed.path}';
-          } else {
-            resolvedUrl = rawUrl;
-          }
-        } catch (_) {
-          resolvedUrl = rawUrl;
-        }
-      }
-    }
+    final docKey = docId ?? json['id']?.toString() ?? '';
+    final String rawUrl = json['image_url']?.toString() ?? '';
+    final String resolvedUrl = AuthorityDirectoryService.instance.resolveImageUrl(rawUrl, docKey);
 
     final rawRoadStatus = (json['road_status'] ?? '').toString();
     final rawDisplayClass = (json['display_class'] ?? json['road_status']?.toString().replaceAll(' Road', '') ?? 'Unknown').toString();

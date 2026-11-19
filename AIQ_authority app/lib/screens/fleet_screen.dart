@@ -19,6 +19,8 @@ import '../services/role_service.dart';
 import '../services/trash_spots_service.dart';
 import '../widgets/trash_pinpoint_marker.dart';
 import '../services/ward_zone_service.dart';
+import '../models/trail_segment.dart';
+import '../widgets/trash_flag_inspection_modal.dart';
 
 enum MapMode { view, drawWard, drawZone }
 
@@ -100,12 +102,42 @@ class _FleetScreenState extends State<FleetScreen> {
   }
 
   Map<String, Map<String, dynamic>> _liveTrackingData = {};
+  final Map<String, StreamSubscription> _dailyStatsSubs = {};
+  final Map<String, double> _vehicleDistances = {};
+  final Map<String, List<Polyline>> _vehicleTrails = {};
+  String get _todayDateString => DateTime.now().toIso8601String().split('T')[0];
+
+  void _subscribeToDailyStats(String vNum) {
+    final clean = vNum.trim();
+    if (clean.isEmpty || _dailyStatsSubs.containsKey(clean)) return;
+    _dailyStatsSubs[clean] = FirebaseFirestore.instance
+        .collection('vehicles')
+        .doc(clean)
+        .collection('daily_stats')
+        .doc(_todayDateString)
+        .snapshots()
+        .listen((snap) {
+      if (snap.exists && snap.data() != null) {
+        final dist = ((snap.data()!['distance_km'] ?? 0.0) as num).toDouble();
+        final polylines = TrailSegment.listFromDailyStats(snap.data());
+        if (mounted) {
+          setState(() {
+            _vehicleDistances[clean] = dist;
+            _vehicleTrails[clean] = polylines;
+          });
+        }
+      }
+    });
+  }
 
   void _fetchDataFromFirestore() {
     _vehiclesSub = FirebaseFirestore.instance.collection('vehicles').snapshots().listen((snapshot) {
       final vehicles = snapshot.docs.map((doc) => Vehicle.fromJson(doc.id, doc.data())).toList();
       setState(() {
         for (var newVehicle in vehicles) {
+          _subscribeToDailyStats(newVehicle.vehicleNumber);
+          _subscribeToDailyStats(newVehicle.id);
+
           Map<String, dynamic>? liveData = _liveTrackingData[newVehicle.vehicleNumber] ?? _liveTrackingData[newVehicle.id];
           if (liveData == null) {
             final cleanV = newVehicle.vehicleNumber.toLowerCase().replaceAll(RegExp(r'[\s\-_]'), '');
@@ -192,6 +224,10 @@ class _FleetScreenState extends State<FleetScreen> {
     _vehiclesSub?.cancel();
     _wardsSub?.cancel();
     _zonesSub?.cancel();
+    for (var sub in _dailyStatsSubs.values) {
+      sub.cancel();
+    }
+    _dailyStatsSubs.clear();
     _mapController.dispose();
     super.dispose();
   }
@@ -283,7 +319,12 @@ class _FleetScreenState extends State<FleetScreen> {
       }
       final centerLat = (minLat + maxLat) / 2;
       final centerLng = (minLng + maxLng) / 2;
-      _mapController.move(LatLng(centerLat, centerLng), 13.5);
+      final double targetZoom = (_selectedWardFilter != 'All Wards')
+          ? 15.2
+          : ((_selectedZoneFilter != 'All Zones') ? 12.5 : 11.8);
+      _mapController.move(LatLng(centerLat, centerLng), targetZoom);
+    } else {
+      _mapController.move(const LatLng(12.9716, 77.5946), 11.8);
     }
   }
 
@@ -292,26 +333,32 @@ class _FleetScreenState extends State<FleetScreen> {
     final bool isMobile = MediaQuery.of(context).size.width < 768;
     return Scaffold(
       backgroundColor: const Color(0xFFF9FAFB),
-      body: Column(
-        children: [
-          // Filter Bar
-          _buildFilterBar(),
-          // Main Content Area
-          Expanded(
-            child: SingleChildScrollView(
-              padding: EdgeInsets.symmetric(horizontal: isMobile ? 12.0 : 24.0, vertical: 16.0),
-              child: Column(
-                children: [
-                  _buildKPIs(isMobile),
-                  const SizedBox(height: 24),
-                  if (_bottomNavIndex == 0) _buildFleetsAndRoutesView(isMobile),
-                  if (_bottomNavIndex == 1) _buildDevicesView(),
-                  if (_bottomNavIndex == 2) const Center(child: Padding(padding: EdgeInsets.all(40), child: Text("Analytics (Coming Soon)"))),
-                ],
+      body: Padding(
+        padding: EdgeInsets.fromLTRB(isMobile ? 12.0 : 24.0, isMobile ? 12.0 : 24.0, isMobile ? 12.0 : 24.0, 0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Standard Left-Aligned Filter Bar
+            _buildFilterBar(),
+            const SizedBox(height: 16),
+            // Main Content Area
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.only(bottom: 16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildKPIs(isMobile),
+                    const SizedBox(height: 24),
+                    if (_bottomNavIndex == 0) _buildFleetsAndRoutesView(isMobile),
+                    if (_bottomNavIndex == 1) _buildDevicesView(),
+                    if (_bottomNavIndex == 2) const Center(child: Padding(padding: EdgeInsets.all(40), child: Text("Analytics (Coming Soon)"))),
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
       bottomNavigationBar: Container(
         decoration: const BoxDecoration(
@@ -404,8 +451,13 @@ class _FleetScreenState extends State<FleetScreen> {
     }
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-      color: Colors.white,
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))],
+      ),
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: Row(
@@ -432,112 +484,170 @@ class _FleetScreenState extends State<FleetScreen> {
             _buildDropdown('Ward', validSelectedWard, wards, (v) {
               setState(() { _selectedWardFilter = v; _updateMapForSelection(); });
             }),
-            const SizedBox(width: 16),
-            // Date Picker mimicking mockup
+            const SizedBox(width: 24),
+            Row(
+              children: [
+                Container(width: 8, height: 8, decoration: const BoxDecoration(color: Color(0xFF198754), shape: BoxShape.circle)),
+                const SizedBox(width: 8),
+                const Text('Live Tracking', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+              ],
+            ),
+            const SizedBox(width: 12),
+            Text(
+              'Last updated: ${TimeOfDay.now().format(context)}',
+              style: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
+            ),
+            const SizedBox(width: 20),
+            // Date Picker mimicking Dashboard style
             InkWell(
               onTap: () => _pickDate(context),
               borderRadius: BorderRadius.circular(8),
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: BoxDecoration(border: Border.all(color: const Color(0xFFE5E7EB)), borderRadius: BorderRadius.circular(8)),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  border: Border.all(color: const Color(0xFFE2E8F0)),
+                  borderRadius: BorderRadius.circular(8),
+                ),
                 child: Row(
                   children: [
-                    const Icon(LucideIcons.calendar, size: 16, color: Color(0xFF6B7280)),
-                    const SizedBox(width: 8),
-                    Text(
-                      _isDaily 
-                        ? _formatDate(_selectedDate) 
-                        : '${_formatDate(DateTime(_selectedDate.year, _selectedDate.month, 1))} - ${_formatDate(DateTime(_selectedDate.year, _selectedDate.month + 1, 0))}', 
-                      style: GoogleFonts.inter(fontWeight: FontWeight.w600, color: const Color(0xFF111827), fontSize: 13)
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Date', style: TextStyle(fontSize: 10, color: Color(0xFF64748B))),
+                        const SizedBox(height: 2),
+                        Row(
+                          children: [
+                            const Icon(LucideIcons.calendar, size: 14, color: Color(0xFF1E293B)),
+                            const SizedBox(width: 6),
+                            Text(
+                              _isDaily 
+                                ? _formatDate(_selectedDate) 
+                                : '${_formatDate(DateTime(_selectedDate.year, _selectedDate.month, 1))} - ${_formatDate(DateTime(_selectedDate.year, _selectedDate.month + 1, 0))}', 
+                              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF1E293B)),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 8),
-                    const Icon(Icons.keyboard_arrow_down, size: 16, color: Color(0xFF6B7280)),
+                    const SizedBox(width: 16),
+                    const Icon(Icons.keyboard_arrow_down, color: Color(0xFF64748B)),
                   ],
                 ),
               ),
             ),
-            const SizedBox(width: 24),
-            // Toggle
+            const SizedBox(width: 20),
+            // Daily / Monthly Toggle
             Container(
-            decoration: BoxDecoration(border: Border.all(color: const Color(0xFFE5E7EB)), borderRadius: BorderRadius.circular(8)),
-            child: Row(
-              children: [
-                InkWell(
-                  onTap: () => setState(() => _isDaily = true),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                    decoration: BoxDecoration(color: _isDaily ? const Color(0xFF0F5132) : Colors.transparent, borderRadius: const BorderRadius.only(topLeft: Radius.circular(7), bottomLeft: Radius.circular(7))),
-                    child: Text('Daily', style: GoogleFonts.inter(fontWeight: FontWeight.bold, color: _isDaily ? Colors.white : const Color(0xFF4B5563), fontSize: 13)),
+              decoration: BoxDecoration(border: Border.all(color: const Color(0xFFE2E8F0)), borderRadius: BorderRadius.circular(8)),
+              child: Row(
+                children: [
+                  InkWell(
+                    onTap: () => setState(() => _isDaily = true),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      decoration: BoxDecoration(color: _isDaily ? const Color(0xFF0F5132) : Colors.transparent, borderRadius: const BorderRadius.only(topLeft: Radius.circular(7), bottomLeft: Radius.circular(7))),
+                      child: Text('Daily', style: GoogleFonts.inter(fontWeight: FontWeight.bold, color: _isDaily ? Colors.white : const Color(0xFF4B5563), fontSize: 13)),
+                    ),
                   ),
-                ),
-                InkWell(
-                  onTap: () => setState(() => _isDaily = false),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                    decoration: BoxDecoration(color: !_isDaily ? const Color(0xFF0F5132) : Colors.transparent, borderRadius: const BorderRadius.only(topRight: Radius.circular(7), bottomRight: Radius.circular(7))),
-                    child: Text('Monthly', style: GoogleFonts.inter(fontWeight: FontWeight.bold, color: !_isDaily ? Colors.white : const Color(0xFF4B5563), fontSize: 13)),
+                  InkWell(
+                    onTap: () => setState(() => _isDaily = false),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      decoration: BoxDecoration(color: !_isDaily ? const Color(0xFF0F5132) : Colors.transparent, borderRadius: const BorderRadius.only(topRight: Radius.circular(7), bottomRight: Radius.circular(7))),
+                      child: Text('Monthly', style: GoogleFonts.inter(fontWeight: FontWeight.bold, color: !_isDaily ? Colors.white : const Color(0xFF4B5563), fontSize: 13)),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          )
-        ],
-      ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildDropdown(String label, String value, List<String> items, Function(String) onChanged) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.bold, color: const Color(0xFF111827))),
-        const SizedBox(height: 4),
-        Container(
-          width: 180,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-          decoration: BoxDecoration(border: Border.all(color: const Color(0xFFE5E7EB)), borderRadius: BorderRadius.circular(8)),
-          child: DropdownButtonHideUnderline(
-            child: DropdownButton<String>(
-              value: items.contains(value) ? value : items.first,
-              icon: const Icon(Icons.keyboard_arrow_down, size: 16, color: Color(0xFF6B7280)),
-              isExpanded: true,
-              style: GoogleFonts.inter(color: const Color(0xFF111827), fontWeight: FontWeight.w600, fontSize: 13),
-              dropdownColor: Colors.white,
-              onChanged: (v) { if (v != null) onChanged(v); },
-              items: items.map((val) => DropdownMenuItem(value: val, child: Text(val))).toList(),
-            ),
-          ),
+    return PopupMenuButton<String>(
+      onSelected: onChanged,
+      itemBuilder: (context) => items.map((item) => PopupMenuItem(value: item, child: Text(item))).toList(),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          border: Border.all(color: const Color(0xFFE2E8F0)),
+          borderRadius: BorderRadius.circular(8),
         ),
-      ],
+        child: Row(
+          children: [
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label, style: const TextStyle(fontSize: 10, color: Color(0xFF64748B))),
+                const SizedBox(height: 2),
+                Text(value, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+              ],
+            ),
+            const SizedBox(width: 20),
+            const Icon(Icons.keyboard_arrow_down, color: Color(0xFF64748B)),
+          ],
+        ),
+      ),
     );
   }
 
   Widget _buildKPIs([bool isMobile = false]) {
+    final activeCount = _filteredVehicles.where((v) => v.isActive).length;
+    final totalCount = _filteredVehicles.length;
+    final activePct = totalCount > 0 ? ((activeCount / totalCount) * 100).toStringAsFixed(1) : '0';
+
+    double totalDist = 0.0;
+    for (var v in _filteredVehicles) {
+      totalDist += _vehicleDistances[v.vehicleNumber] ?? _vehicleDistances[v.id] ?? 0.0;
+    }
+    final distanceCoveredStr = totalDist > 0 ? '${totalDist.toStringAsFixed(1)} km' : '0.0 km';
+
+    final routesCompletedCount = _filteredVehicles.where((v) {
+      final d = _vehicleDistances[v.vehicleNumber] ?? _vehicleDistances[v.id] ?? 0.0;
+      return d > 0.5 && !v.isActive;
+    }).length;
+
+    final avgEfficiency = totalCount > 0 ? '${((activeCount / totalCount) * 100).round()}%' : '100%';
+
+    final onTimeCount = _filteredVehicles.where((v) {
+      if (!v.isActive) return false;
+      if (v.lastHeartbeat != null && DateTime.now().difference(v.lastHeartbeat!).inMinutes <= 15) return true;
+      return false;
+    }).length;
+    final onTimeRate = activeCount > 0 ? '${((onTimeCount / activeCount) * 100).round()}%' : (totalCount > 0 ? '100%' : '0%');
+
+    final needsRepairCount = _filteredVehicles.where((v) {
+      return !v.isActive || (v.lastHeartbeat != null && DateTime.now().difference(v.lastHeartbeat!).inHours > 12);
+    }).length;
+    final needsRepairPct = totalCount > 0 ? ((needsRepairCount / totalCount) * 100).toStringAsFixed(1) : '0';
+
     if (isMobile) {
       return Column(
         children: [
           Row(
             children: [
-              Expanded(child: _buildKPICard('ACTIVE FLEET', '4,287', '77.95% Total', LucideIcons.truck, const Color(0xFF10B981), isMobile: true)),
+              Expanded(child: _buildKPICard('ACTIVE FLEET', '$activeCount', '$activePct% of Total', LucideIcons.truck, const Color(0xFF10B981), isMobile: true)),
               const SizedBox(width: 10),
-              Expanded(child: _buildKPICard('ROUTES COMPLETED', '1,203', 'Today', LucideIcons.mapPin, const Color(0xFF3B82F6), subtitleColor: const Color(0xFF3B82F6), isMobile: true)),
+              Expanded(child: _buildKPICard('ROUTES COMPLETED', '$routesCompletedCount', 'Today', LucideIcons.mapPin, const Color(0xFF3B82F6), subtitleColor: const Color(0xFF3B82F6), isMobile: true)),
             ],
           ),
           const SizedBox(height: 10),
           Row(
             children: [
-              Expanded(child: _buildKPICard('DISTANCE COVERED', '12,842 km', 'Today', LucideIcons.checkCircle, const Color(0xFF8B5CF6), subtitleColor: const Color(0xFF8B5CF6), isMobile: true)),
+              Expanded(child: _buildKPICard('DISTANCE COVERED', distanceCoveredStr, 'Today', LucideIcons.checkCircle, const Color(0xFF8B5CF6), subtitleColor: const Color(0xFF8B5CF6), isMobile: true)),
               const SizedBox(width: 10),
-              Expanded(child: _buildKPICard('AVG. EFFICIENCY', '86%', '+4% vs Yday', LucideIcons.trendingUp, const Color(0xFFF59E0B), subtitleColor: const Color(0xFFF59E0B), isMobile: true)),
+              Expanded(child: _buildKPICard('AVG. EFFICIENCY', avgEfficiency, 'Fleet Rate', LucideIcons.trendingUp, const Color(0xFFF59E0B), subtitleColor: const Color(0xFFF59E0B), isMobile: true)),
             ],
           ),
           const SizedBox(height: 10),
           Row(
             children: [
-              Expanded(child: _buildKPICard('ON TIME RATE', '92%', '+6% vs Yday', LucideIcons.clock, const Color(0xFF10B981), subtitleColor: const Color(0xFF10B981), isMobile: true)),
+              Expanded(child: _buildKPICard('ON TIME RATE', onTimeRate, 'On Schedule', LucideIcons.clock, const Color(0xFF10B981), subtitleColor: const Color(0xFF10B981), isMobile: true)),
               const SizedBox(width: 10),
-              Expanded(child: _buildKPICard('NEEDS REPAIR', '68', '3.87% Total', LucideIcons.wrench, const Color(0xFFEF4444), subtitleColor: const Color(0xFFEF4444), isMobile: true)),
+              Expanded(child: _buildKPICard('NEEDS REPAIR', '$needsRepairCount', '$needsRepairPct% of Total', LucideIcons.wrench, const Color(0xFFEF4444), subtitleColor: const Color(0xFFEF4444), isMobile: true)),
             ],
           ),
         ],
@@ -545,25 +655,25 @@ class _FleetScreenState extends State<FleetScreen> {
     }
     return Row(
       children: [
-        Expanded(child: _buildKPICard('ACTIVE VEHICLES', '4,287', '77.95% of Total', LucideIcons.truck, const Color(0xFF10B981))),
+        Expanded(child: _buildKPICard('ACTIVE VEHICLES', '$activeCount', '$activePct% of Total', LucideIcons.truck, const Color(0xFF10B981))),
         const SizedBox(width: 16),
-        Expanded(child: _buildKPICard('ROUTES COMPLETED', '1,203', 'Today', LucideIcons.mapPin, const Color(0xFF3B82F6), subtitleColor: const Color(0xFF3B82F6))),
+        Expanded(child: _buildKPICard('ROUTES COMPLETED', '$routesCompletedCount', 'Today', LucideIcons.mapPin, const Color(0xFF3B82F6), subtitleColor: const Color(0xFF3B82F6))),
         const SizedBox(width: 16),
-        Expanded(child: _buildKPICard('DISTANCE COVERED', '12,842 km', 'Today', LucideIcons.checkCircle, const Color(0xFF8B5CF6), subtitleColor: const Color(0xFF8B5CF6))),
+        Expanded(child: _buildKPICard('DISTANCE COVERED', distanceCoveredStr, 'Today', LucideIcons.checkCircle, const Color(0xFF8B5CF6), subtitleColor: const Color(0xFF8B5CF6))),
         const SizedBox(width: 16),
-        Expanded(child: _buildKPICard('AVG. EFFICIENCY', '86%', '+4% vs Yesterday', LucideIcons.trendingUp, const Color(0xFFF59E0B), subtitleColor: const Color(0xFFF59E0B))),
+        Expanded(child: _buildKPICard('AVG. EFFICIENCY', avgEfficiency, 'Fleet Rate', LucideIcons.trendingUp, const Color(0xFFF59E0B), subtitleColor: const Color(0xFFF59E0B))),
         const SizedBox(width: 16),
-        Expanded(child: _buildKPICard('ON TIME PERFORMANCE', '92%', '+6% vs Yesterday', LucideIcons.clock, const Color(0xFF10B981), subtitleColor: const Color(0xFF10B981))),
+        Expanded(child: _buildKPICard('ON TIME PERFORMANCE', onTimeRate, 'On Schedule', LucideIcons.clock, const Color(0xFF10B981), subtitleColor: const Color(0xFF10B981))),
         const SizedBox(width: 16),
-        Expanded(child: _buildKPICard('VEHICLES NEED REPAIR', '68', '3.87% of Total', LucideIcons.wrench, const Color(0xFFEF4444), subtitleColor: const Color(0xFFEF4444))),
+        Expanded(child: _buildKPICard('VEHICLES NEED REPAIR', '$needsRepairCount', '$needsRepairPct% of Total', LucideIcons.wrench, const Color(0xFFEF4444), subtitleColor: const Color(0xFFEF4444))),
       ],
     );
   }
 
   Widget _buildKPICard(String title, String value, String subtitle, IconData icon, Color iconColor, {Color subtitleColor = const Color(0xFF10B981), bool isMobile = false}) {
     return Container(
-      height: isMobile ? 85 : 100,
-      padding: EdgeInsets.symmetric(horizontal: isMobile ? 10 : 16, vertical: isMobile ? 8 : 16),
+      constraints: BoxConstraints(minHeight: isMobile ? 80 : 96),
+      padding: EdgeInsets.symmetric(horizontal: isMobile ? 8 : 14, vertical: isMobile ? 6 : 10),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
@@ -574,18 +684,19 @@ class _FleetScreenState extends State<FleetScreen> {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Container(
-            width: isMobile ? 36 : 48,
-            height: isMobile ? 36 : 48,
+            width: isMobile ? 34 : 44,
+            height: isMobile ? 34 : 44,
             decoration: BoxDecoration(
               color: iconColor.withOpacity(0.1),
               borderRadius: BorderRadius.circular(10),
             ),
-            child: Icon(icon, color: iconColor, size: isMobile ? 18 : 24),
+            child: Icon(icon, color: iconColor, size: isMobile ? 18 : 22),
           ),
-          SizedBox(width: isMobile ? 8 : 16),
+          SizedBox(width: isMobile ? 8 : 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
@@ -599,18 +710,20 @@ class _FleetScreenState extends State<FleetScreen> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                SizedBox(height: isMobile ? 2 : 4),
-                Text(
-                  value,
-                  style: GoogleFonts.inter(
-                    fontSize: isMobile ? 18 : 24,
-                    fontWeight: FontWeight.w800,
-                    color: const Color(0xFF111827),
+                const SizedBox(height: 2),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    value,
+                    style: GoogleFonts.inter(
+                      fontSize: isMobile ? 18 : 22,
+                      fontWeight: FontWeight.w800,
+                      color: const Color(0xFF111827),
+                    ),
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                 ),
-                SizedBox(height: isMobile ? 1 : 2),
+                const SizedBox(height: 2),
                 Text(
                   subtitle,
                   style: GoogleFonts.inter(
@@ -965,7 +1078,7 @@ class _FleetScreenState extends State<FleetScreen> {
                     mapController: _mapController,
                     options: MapOptions(
                       initialCenter: const LatLng(12.9716, 77.5946),
-                      initialZoom: 12.0,
+                      initialZoom: 11.8,
 
                       onTap: (tapPosition, point) {
                         if (_currentMode != MapMode.view) {
@@ -980,16 +1093,36 @@ class _FleetScreenState extends State<FleetScreen> {
                         tileProvider: kIsWeb ? null : CachedTileProvider(store: MapCacheService.store),
                       ),
                       PolylineLayer(
-                        polylines: _filteredVehicles.where((v) => v.assignedRoute != null && v.assignedRoute!.isNotEmpty).map((v) {
-                          return Polyline(
-                            points: v.assignedRoute!,
-                            color: const Color(0xFF3B82F6),
-                            strokeWidth: 4.0,
-                          );
-                        }).toList(),
+                        polylines: <Polyline>[
+                          ..._filteredVehicles.where((v) => v.assignedRoute != null && v.assignedRoute!.isNotEmpty).map((v) {
+                            return Polyline(
+                              points: v.assignedRoute!,
+                              color: const Color(0xFF3B82F6).withValues(alpha: 0.5),
+                              strokeWidth: 4.0,
+                            );
+                          }),
+                          if (_selectedVehicle != null)
+                            ...(_vehicleTrails[_selectedVehicle!.vehicleNumber] ?? _vehicleTrails[_selectedVehicle!.id] ?? const <Polyline>[])
+                          else
+                            ..._vehicleTrails.values.expand((trail) => trail),
+                        ],
                       ),
                       MarkerLayer(markers: _buildCustomMarkers()),
-                      MarkerLayer(markers: _buildTrashMarkers()),
+                      Builder(
+                        builder: (context) {
+                          final camera = MapCamera.of(context);
+                          final hasSpecificWard = _selectedWardFilter != 'All Wards' && _selectedWardFilter.trim().isNotEmpty;
+                          final bool showPins = hasSpecificWard
+                              ? (camera.zoom >= 14.8)
+                              : (camera.zoom >= WardZoneService.individualWardPinsZoomThreshold);
+                          if (!showPins) {
+                            return const SizedBox.shrink();
+                          }
+                          return MarkerLayer(
+                            markers: _buildTrashMarkers(),
+                          );
+                        },
+                      ),
 
                       ...WardZoneService.instance.buildLayers(
                         selectedZone: _selectedZone?.name ?? (_selectedZoneFilter != 'All Zones' ? _selectedZoneFilter : null),
@@ -1146,63 +1279,7 @@ class _FleetScreenState extends State<FleetScreen> {
   }
 
   void _showTrashPopup(GarbageFlag flag) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.white,
-        title: Text(
-          '${flag.className.replaceAll('_', ' ')} - ${flag.displayClass}',
-          style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
-        ),
-        content: SizedBox(
-          width: 450,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Image.network(
-                  flag.imageUrl,
-                  headers: const {"ngrok-skip-browser-warning": "true"},
-                  height: 220,
-                  width: double.infinity,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => Container(
-                    height: 200,
-                    color: Colors.grey.shade200,
-                    child: const Center(child: Icon(Icons.broken_image, size: 40, color: Colors.grey)),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text("Confidence: ${(flag.confidence * 100).toStringAsFixed(1)}%", style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 4),
-              Text("Vehicle: ${flag.vehicleNumber}", style: const TextStyle(color: Colors.black87)),
-              const SizedBox(height: 4),
-              Text("Location: ${flag.zone} - ${flag.ward}", style: const TextStyle(color: Colors.black54, fontSize: 12)),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close', style: TextStyle(color: Colors.black54)),
-          ),
-          ElevatedButton.icon(
-            icon: const Icon(Icons.directions_outlined, size: 18),
-            label: const Text('Directions'),
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0F5132), foregroundColor: Colors.white),
-            onPressed: () async {
-              final url = Uri.parse('https://www.google.com/maps/dir/?api=1&destination=${flag.lat},${flag.lng}');
-              if (await canLaunchUrl(url)) {
-                await launchUrl(url);
-              }
-            },
-          ),
-        ],
-      ),
-    );
+    TrashFlagInspectionModal.show(context, flag);
   }
 
   Widget _buildDevicesView() {
@@ -1529,7 +1606,13 @@ class _FleetScreenState extends State<FleetScreen> {
                   await batch.commit();
                   if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Dummy Data Populated to Firestore!')));
                 },
-                child: Text('Device Activity Logs (1,248)', style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.bold, color: const Color(0xFF111827))),
+                child: StreamBuilder<QuerySnapshot>(
+                  stream: FirebaseFirestore.instance.collection('device_logs').snapshots(),
+                  builder: (context, snapshot) {
+                    final count = snapshot.data?.docs.length ?? 0;
+                    return Text('Device Activity Logs ($count)', style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.bold, color: const Color(0xFF111827)));
+                  },
+                ),
               ),
               Row(
                 children: [
@@ -1655,20 +1738,14 @@ class _FleetScreenState extends State<FleetScreen> {
                 );
               }).toList();
 
-              // Add Dummy Rows at the bottom if no real data is found, or even if it is to fill the table.
-              if (realDocs.isEmpty && _deviceLogSearchQuery.isEmpty) {
-                rows.addAll([
-                  _buildDeviceLogRow('4_17072026', 'KA 01 AA 0003', 'sanjana', 'App', '2026-08-14 18:27:12', '2026-08-14 19:02:45', '35m 33s', true),
-                  _buildDeviceLogRow('69_14082026', 'KA 01 AA 0002', 'kokila', 'Website', '2026-08-14 18:26:09', '2026-08-14 19:00:12', '34m 03s', true),
-                  _buildDeviceLogRow('4_17072026', 'KA 01 AA 0002', 'kokila', 'App', '2026-08-14 16:25:37', '2026-08-14 16:58:21', '32m 44s', true),
-                  _buildDeviceLogRow('4_17072026', 'KA 01 AA 0001', 'vijay', 'App', '2026-08-14 15:58:11', '2026-08-14 16:35:44', '37m 33s', true),
-                  _buildDeviceLogRow('3_17072026', 'KA 01 AA 0002', 'kokila', 'App', '2026-08-14 15:41:48', '2026-08-14 16:10:22', '28m 34s', true),
-                  _buildDeviceLogRow('22_20072026', 'KA 01 AA 0003', 'sanjana', 'App', '2026-08-14 15:16:44', '2026-08-14 15:45:31', '28m 47s', true),
-                  _buildDeviceLogRow('68_13082026', 'KA 01 AA 0003', 'sanjana', 'Website', '2026-08-13 14:36:35', '2026-08-13 15:05:10', '28m 35s', true),
-                  _buildDeviceLogRow('4_17072026', 'KA 01 AA 0002', 'kokila', 'App', '2026-08-08 07:55:18', '2026-08-08 08:25:41', '30m 23s', true),
-                  _buildDeviceLogRow('67_08082026', 'KA 01 AA 0001', 'vijay', 'Website', '2026-08-08 07:37:09', '2026-08-08 08:05:33', '28m 24s', false),
-                  _buildDeviceLogRow('22_20072026', 'KA 01 AA 0003', 'sanjana', 'App', '2026-08-07 14:34:42', '2026-08-07 15:12:03', '37m 21s', true),
-                ]);
+              // Empty state if no records
+              if (realDocs.isEmpty) {
+                return const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 32.0),
+                  child: Center(
+                    child: Text('No device activity logs found.', style: TextStyle(color: Color(0xFF6B7280), fontSize: 13, fontStyle: FontStyle.italic)),
+                  ),
+                );
               }
               
               return Column(children: rows);
@@ -1682,20 +1759,18 @@ class _FleetScreenState extends State<FleetScreen> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Showing 1 to 10 of 1,248 logs', style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF6B7280))),
+                StreamBuilder<QuerySnapshot>(
+                  stream: FirebaseFirestore.instance.collection('device_logs').snapshots(),
+                  builder: (context, snapshot) {
+                    final count = snapshot.data?.docs.length ?? 0;
+                    return Text('Showing ${count == 0 ? 0 : 1} to $count of $count logs', style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF6B7280)));
+                  },
+                ),
                 Row(
                   children: [
                     Container(width: 28, height: 28, decoration: BoxDecoration(border: Border.all(color: const Color(0xFFE5E7EB)), borderRadius: BorderRadius.circular(4)), child: const Icon(Icons.chevron_left, size: 16)),
                     const SizedBox(width: 8),
                     Container(width: 28, height: 28, alignment: Alignment.center, decoration: BoxDecoration(color: const Color(0xFF0F5132), borderRadius: BorderRadius.circular(4)), child: const Text('1', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
-                    const SizedBox(width: 8),
-                    Container(width: 28, height: 28, alignment: Alignment.center, decoration: BoxDecoration(border: Border.all(color: const Color(0xFFE5E7EB)), borderRadius: BorderRadius.circular(4)), child: const Text('2', style: TextStyle(fontWeight: FontWeight.bold))),
-                    const SizedBox(width: 8),
-                    Container(width: 28, height: 28, alignment: Alignment.center, decoration: BoxDecoration(border: Border.all(color: const Color(0xFFE5E7EB)), borderRadius: BorderRadius.circular(4)), child: const Text('3', style: TextStyle(fontWeight: FontWeight.bold))),
-                    const SizedBox(width: 8),
-                    const Text('...', style: TextStyle(color: Colors.grey)),
-                    const SizedBox(width: 8),
-                    Container(width: 28, height: 28, alignment: Alignment.center, decoration: BoxDecoration(border: Border.all(color: const Color(0xFFE5E7EB)), borderRadius: BorderRadius.circular(4)), child: const Text('125', style: TextStyle(fontWeight: FontWeight.bold))),
                     const SizedBox(width: 8),
                     Container(width: 28, height: 28, decoration: BoxDecoration(border: Border.all(color: const Color(0xFFE5E7EB)), borderRadius: BorderRadius.circular(4)), child: const Icon(Icons.chevron_right, size: 16)),
                     const SizedBox(width: 24),
@@ -1705,12 +1780,12 @@ class _FleetScreenState extends State<FleetScreen> {
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                       decoration: BoxDecoration(border: Border.all(color: const Color(0xFFE5E7EB)), borderRadius: BorderRadius.circular(4)),
                       child: Row(children: [Text('10', style: GoogleFonts.inter(fontSize: 12)), const SizedBox(width: 8), const Icon(Icons.keyboard_arrow_down, size: 14)]),
-                    )
+                    ),
                   ],
                 ),
               ],
             ),
-          )
+          ),
         ],
       ),
     );

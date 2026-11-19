@@ -13,6 +13,9 @@ import '../widgets/trash_pinpoint_marker.dart';
 import '../services/ward_zone_service.dart';
 import '../services/trash_spots_service.dart';
 import '../models/garbage_flag.dart';
+import '../models/trail_segment.dart';
+import '../widgets/trash_flag_inspection_modal.dart';
+import '../services/authority_directory_service.dart';
 
 class ComndScreen extends StatefulWidget {
   const ComndScreen({super.key});
@@ -61,17 +64,54 @@ class _ComndScreenState extends State<ComndScreen> {
     if (mounted) setState(() {});
   }
 
+  final Map<String, List<Polyline>> _vehicleTrails = {};
+  final Map<String, StreamSubscription> _vehicleTrailSubs = {};
+
   @override
   void dispose() {
     WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
     TrashSpotsService.instance.flagsNotifier.removeListener(_onWardZoneUpdate);
     _liveTrackingSub?.cancel();
+    for (var sub in _vehicleTrailSubs.values) {
+      sub.cancel();
+    }
+    _vehicleTrailSubs.clear();
     super.dispose();
+  }
+
+  void _syncVehicleTrails(List<String> vehicleIds) {
+    final currentIds = vehicleIds.toSet();
+    final toRemove = _vehicleTrailSubs.keys.where((k) => !currentIds.contains(k)).toList();
+    for (var k in toRemove) {
+      _vehicleTrailSubs[k]?.cancel();
+      _vehicleTrailSubs.remove(k);
+      _vehicleTrails.remove(k);
+    }
+
+    final today = DateTime.now().toIso8601String().substring(0, 10);
+    for (var vId in vehicleIds) {
+      if (_vehicleTrailSubs.containsKey(vId)) continue;
+      _vehicleTrailSubs[vId] = FirebaseFirestore.instance
+          .collection('vehicles')
+          .doc(vId)
+          .collection('daily_stats')
+          .doc(today)
+          .snapshots()
+          .listen((snap) {
+        if (!mounted) return;
+        final data = snap.data();
+        final polylines = TrailSegment.listFromDailyStats(data);
+        setState(() {
+          _vehicleTrails[vId] = polylines;
+        });
+      });
+    }
   }
 
   void _startLiveTrackingListener() {
     _liveTrackingSub = FirebaseFirestore.instance.collection('live_tracking').snapshots().listen((snap) {
       if (!mounted) return;
+      final activeIds = <String>[];
       setState(() {
         for (var doc in snap.docs) {
           final data = doc.data();
@@ -79,9 +119,11 @@ class _ComndScreenState extends State<ComndScreen> {
           final lng = (data['lng'] as num?)?.toDouble();
           if (lat != null && lng != null) {
             _liveVehicles[doc.id] = data;
+            activeIds.add(doc.id);
           }
         }
       });
+      _syncVehicleTrails(activeIds);
     });
   }
 
@@ -146,7 +188,7 @@ class _ComndScreenState extends State<ComndScreen> {
             cLat += p.latitude;
             cLng += p.longitude;
           }
-          _vehicleMapController.move(LatLng(cLat / b.length, cLng / b.length), 15.0);
+          _vehicleMapController.move(LatLng(cLat / b.length, cLng / b.length), 15.2);
           return;
         }
       } else if (zone != 'All Zones') {
@@ -160,9 +202,11 @@ class _ComndScreenState extends State<ComndScreen> {
             cLat += p.latitude;
             cLng += p.longitude;
           }
-          _vehicleMapController.move(LatLng(cLat / b.length, cLng / b.length), 13.8);
+          _vehicleMapController.move(LatLng(cLat / b.length, cLng / b.length), 12.5);
           return;
         }
+      } else {
+        _vehicleMapController.move(const LatLng(12.9716, 77.5946), 11.8);
       }
     } catch (_) {}
   }
@@ -643,6 +687,21 @@ class _ComndScreenState extends State<ComndScreen> {
                       scrollDirection: Axis.horizontal,
                       child: Row(
                         children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.grey.shade300),
+                              borderRadius: BorderRadius.circular(6),
+                              color: const Color(0xFFF8FAFC),
+                            ),
+                            child: Row(
+                              children: [
+                                const Text('Role: ', style: TextStyle(color: Color(0xFF64748B), fontSize: 12)),
+                                Text(RoleService.currentUserRoleTitle ?? 'None', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.black)),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 10),
                           _buildFilterChip('All Flags (${totalCount})', _vehicleStatusFilter == 'All', () {
                             setState(() => _vehicleStatusFilter = 'All');
                           }),
@@ -811,12 +870,15 @@ class _ComndScreenState extends State<ComndScreen> {
         }
 
         return Card(
+          color: Colors.white,
+          surfaceTintColor: Colors.transparent,
           margin: const EdgeInsets.only(bottom: 14),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
             side: BorderSide(color: isDeflagged ? const Color(0xFF10B981).withOpacity(0.4) : const Color(0xFFEF4444).withOpacity(0.35), width: 1.5),
           ),
           elevation: 2,
+          shadowColor: Colors.black.withOpacity(0.06),
           child: InkWell(
             borderRadius: BorderRadius.circular(16),
             onTap: () {
@@ -831,11 +893,7 @@ class _ComndScreenState extends State<ComndScreen> {
               children: [
                 // Thumbnail with click-to-preview
                 GestureDetector(
-                  onTap: () {
-                    if (imageUrl.isNotEmpty) {
-                      _showImagePreviewDialog(context, imageUrl, '$vehicleNumber • $roadStatus');
-                    }
-                  },
+                  onTap: () => _showMarkerDetailsModal(context, flag),
                   child: Stack(
                     children: [
                       ClipRRect(
@@ -843,16 +901,13 @@ class _ComndScreenState extends State<ComndScreen> {
                         child: Container(
                           width: isMobile ? 100 : 130,
                           height: isMobile ? 100 : 120,
-                          color: const Color(0xFF1E293B),
-                          child: imageUrl.isNotEmpty
-                              ? (imageUrl.contains('ngrok')
-                                  ? NgrokImage(url: imageUrl, fit: BoxFit.cover, width: isMobile ? 100 : 130, height: isMobile ? 100 : 120)
-                                  : Image.network(
-                                      imageUrl,
-                                      fit: BoxFit.cover,
-                                      errorBuilder: (_, __, ___) => const Center(child: Icon(Icons.broken_image, color: Colors.white54)),
-                                    ))
-                              : const Center(child: Icon(LucideIcons.camera, color: Colors.white54, size: 28)),
+                          color: const Color(0xFFF1F5F9),
+                          child: NgrokImage(
+                            url: AuthorityDirectoryService.instance.resolveImageUrl(imageUrl, id),
+                            fit: BoxFit.cover,
+                            width: isMobile ? 100 : 130,
+                            height: isMobile ? 100 : 120,
+                          ),
                         ),
                       ),
                       Positioned(
@@ -860,7 +915,7 @@ class _ComndScreenState extends State<ComndScreen> {
                         right: 4,
                         child: Container(
                           padding: const EdgeInsets.all(4),
-                          decoration: BoxDecoration(color: Colors.black.withOpacity(0.7), shape: BoxShape.circle),
+                          decoration: BoxDecoration(color: Colors.black.withOpacity(0.65), shape: BoxShape.circle),
                           child: const Icon(LucideIcons.maximize2, color: Colors.white, size: 12),
                         ),
                       ),
@@ -939,7 +994,7 @@ class _ComndScreenState extends State<ComndScreen> {
                             const SizedBox(width: 6),
                             Text(
                               '${(confidence * 100).toInt()}% conf',
-                              style: const TextStyle(fontSize: 11, color: Color(0xFF64748B)),
+                              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF64748B)),
                             ),
                           ],
                         ],
@@ -955,7 +1010,7 @@ class _ComndScreenState extends State<ComndScreen> {
                           Expanded(
                             child: Text(
                               '$zone • $ward',
-                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF334155)),
+                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF334155)),
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
@@ -996,10 +1051,11 @@ class _ComndScreenState extends State<ComndScreen> {
                               } catch (_) {}
                             },
                             icon: const Icon(LucideIcons.mapPin, size: 14),
-                            label: const Text('Map Pin', style: TextStyle(fontSize: 12)),
+                            label: const Text('Map Pin', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                             style: OutlinedButton.styleFrom(
                               foregroundColor: const Color(0xFF2563EB),
-                              side: const BorderSide(color: Color(0xFF2563EB)),
+                              backgroundColor: const Color(0xFFEFF6FF),
+                              side: const BorderSide(color: Color(0xFFBFDBFE)),
                               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                             ),
@@ -1008,10 +1064,11 @@ class _ComndScreenState extends State<ComndScreen> {
                           OutlinedButton.icon(
                             onPressed: () => _openMaps(lat, lng),
                             icon: const Icon(LucideIcons.navigation, size: 14),
-                            label: const Text('Directions', style: TextStyle(fontSize: 12)),
+                            label: const Text('Directions', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                             style: OutlinedButton.styleFrom(
                               foregroundColor: const Color(0xFF0F5132),
-                              side: const BorderSide(color: Color(0xFF0F5132)),
+                              backgroundColor: const Color(0xFFECFDF5),
+                              side: const BorderSide(color: Color(0xFFA7F3D0)),
                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                             ),
@@ -1036,17 +1093,25 @@ class _ComndScreenState extends State<ComndScreen> {
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: const Color(0xFF0F5132),
                                 foregroundColor: Colors.white,
+                                elevation: 0,
                                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                               ),
                             ),
                             const SizedBox(width: 6),
-                            IconButton(
-                              onPressed: () => _confirmQuickDeflag(context, id, flag),
-                              icon: const Icon(LucideIcons.checkCheck, color: Color(0xFF10B981), size: 20),
-                              tooltip: 'Quick Deflag (No Camera)',
-                              constraints: const BoxConstraints(),
-                              padding: const EdgeInsets.all(6),
+                            Container(
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFECFDF5),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: const Color(0xFFA7F3D0)),
+                              ),
+                              child: IconButton(
+                                onPressed: () => _confirmQuickDeflag(context, id, flag),
+                                icon: const Icon(LucideIcons.checkCheck, color: Color(0xFF059669), size: 18),
+                                tooltip: 'Quick Deflag (No Camera)',
+                                constraints: const BoxConstraints(),
+                                padding: const EdgeInsets.all(6),
+                              ),
                             ),
                           ] else ...[
                             Container(
@@ -1084,7 +1149,7 @@ class _ComndScreenState extends State<ComndScreen> {
     const double clusterDist = 0.00018;
     final List<List<Map<String, dynamic>>> clusters = [];
 
-    // Draw assigned road routes for live fleet vehicles (never connect distant trash flags directly)
+    // Draw assigned road routes and real-time color-coded driven trails for live fleet vehicles
     List<Polyline> routePolylines = [];
     for (var entry in _liveVehicles.entries) {
       final data = entry.value;
@@ -1094,11 +1159,15 @@ class _ComndScreenState extends State<ComndScreen> {
         if (pts.isNotEmpty) {
           routePolylines.add(Polyline(
             points: pts,
-            color: const Color(0xFF3B82F6),
+            color: const Color(0xFF3B82F6).withValues(alpha: 0.5),
             strokeWidth: 4.0,
           ));
         }
       }
+    }
+    // Add real vehicle driven breadcrumb trails with condition colors (Green = Clean, Orange = Trash, Red = Very Dirty / Pothole)
+    for (var trail in _vehicleTrails.values) {
+      routePolylines.addAll(trail);
     }
 
     for (var f in flags) {
@@ -1129,11 +1198,9 @@ class _ComndScreenState extends State<ComndScreen> {
         borderRadius: BorderRadius.circular(16),
         child: FlutterMap(
           mapController: _vehicleMapController,
-          options: MapOptions(
-            initialCenter: flags.isNotEmpty
-                ? LatLng(((flags.first['lat'] ?? 13.0568) as num).toDouble(), ((flags.first['lng'] ?? 77.5027) as num).toDouble())
-                : const LatLng(13.0568, 77.5027),
-            initialZoom: 13,
+          options: const MapOptions(
+            initialCenter: LatLng(12.9716, 77.5946),
+            initialZoom: 11.8,
           ),
           children: [
             TileLayer(
@@ -1146,41 +1213,53 @@ class _ComndScreenState extends State<ComndScreen> {
             ),
             if (routePolylines.isNotEmpty)
               PolylineLayer(polylines: routePolylines),
-            MarkerLayer(
-              markers: clusters.map<Marker>((cluster) {
-                final f = cluster.first;
-                final lat = ((f['lat'] ?? 0.0) as num).toDouble();
-                final lng = ((f['lng'] ?? 0.0) as num).toDouble();
-                final status = f['status'] ?? 'Flagged';
-                final isDeflagged = status == 'Deflagged';
+            Builder(
+              builder: (context) {
+                final camera = MapCamera.of(context);
+                final hasSpecificWard = _vehicleSelectedWard != 'All Wards' && _vehicleSelectedWard.isNotEmpty;
+                final bool showPins = hasSpecificWard
+                    ? (camera.zoom >= 14.8)
+                    : (camera.zoom >= WardZoneService.individualWardPinsZoomThreshold);
+                if (!showPins || clusters.isEmpty) {
+                  return const SizedBox.shrink();
+                }
+                return MarkerLayer(
+                  markers: clusters.map<Marker>((cluster) {
+                    final f = cluster.first;
+                    final lat = ((f['lat'] ?? 0.0) as num).toDouble();
+                    final lng = ((f['lng'] ?? 0.0) as num).toDouble();
+                    final status = f['status'] ?? 'Flagged';
+                    final isDeflagged = status == 'Deflagged';
 
-                return Marker(
-                  point: LatLng(lat, lng),
-                  width: isDeflagged ? 36 : 38,
-                  height: isDeflagged ? 36 : 46,
-                  alignment: isDeflagged ? Alignment.center : Alignment.topCenter,
-                  child: isDeflagged
-                      ? GestureDetector(
-                          onTap: () => _showMarkerDetailsModal(context, f),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF10B981),
-                              shape: BoxShape.circle,
-                              border: Border.all(color: Colors.white, width: 2),
-                              boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2))],
+                    return Marker(
+                      point: LatLng(lat, lng),
+                      width: isDeflagged ? 36 : 38,
+                      height: isDeflagged ? 36 : 46,
+                      alignment: isDeflagged ? Alignment.center : Alignment.topCenter,
+                      child: isDeflagged
+                          ? GestureDetector(
+                              onTap: () => _showMarkerDetailsModal(context, f),
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF10B981),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: Colors.white, width: 2),
+                                  boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2))],
+                                ),
+                                child: const Center(
+                                  child: Icon(LucideIcons.check, color: Colors.white, size: 18),
+                                ),
+                              ),
+                            )
+                          : TrashPinpointWidget(
+                              count: cluster.length,
+                              isVeryDirty: cluster.any((item) => item['road_status'] == 'Very Dirty Road' || item['road_status'] == 'Very_Dirty'),
+                              onTap: () => _showMarkerDetailsModal(context, f),
                             ),
-                            child: const Center(
-                              child: Icon(LucideIcons.check, color: Colors.white, size: 18),
-                            ),
-                          ),
-                        )
-                      : TrashPinpointWidget(
-                          count: cluster.length,
-                          isVeryDirty: cluster.any((item) => item['road_status'] == 'Very Dirty Road' || item['road_status'] == 'Very_Dirty'),
-                          onTap: () => _showMarkerDetailsModal(context, f),
-                        ),
+                    );
+                  }).toList(),
                 );
-              }).toList(),
+              },
             ),
             // Live fleet vehicle markers on Command Screen
             if (_liveVehicles.isNotEmpty)
@@ -1238,96 +1317,27 @@ class _ComndScreenState extends State<ComndScreen> {
   void _showMarkerDetailsModal(BuildContext context, Map<String, dynamic> flag) {
     final vehicle = flag['vehicle_number'] ?? 'Unknown Vehicle';
     final status = flag['status'] ?? 'Flagged';
-    final roadStatus = flag['road_status'] ?? 'Trash Detected';
-    final imageUrl = flag['image_url'] ?? '';
     final lat = ((flag['lat'] ?? 0.0) as num).toDouble();
     final lng = ((flag['lng'] ?? 0.0) as num).toDouble();
     final isDeflagged = status == 'Deflagged';
 
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (ctx) => Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(vehicle.toString().toUpperCase(), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: isDeflagged ? const Color(0xFFD1FAE5) : const Color(0xFFFEE2E2),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    isDeflagged ? 'DEFLAGGED' : 'FLAGGED',
-                    style: TextStyle(color: isDeflagged ? const Color(0xFF059669) : const Color(0xFFDC2626), fontWeight: FontWeight.bold, fontSize: 11),
-                  ),
-                ),
-              ],
-            ),
-            if (imageUrl.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: SizedBox(
-                  height: 120,
-                  width: double.infinity,
-                  child: imageUrl.contains('ngrok')
-                      ? NgrokImage(url: imageUrl, fit: BoxFit.cover)
-                      : Image.network(
-                          imageUrl,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => const Center(child: Icon(Icons.broken_image)),
-                        ),
-                ),
-              ),
-            ],
-            const SizedBox(height: 12),
-            Text('Status: $roadStatus • ${flag['zone'] ?? ''} - ${flag['ward'] ?? ''}', style: const TextStyle(fontSize: 13, color: Color(0xFF64748B))),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => _openMaps(lat, lng),
-                    icon: const Icon(LucideIcons.navigation, size: 16),
-                    label: const Text('Directions'),
-                    style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF0F5132)),
-                  ),
-                ),
-                if (!isDeflagged) ...[
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        ComndDeflagScreen.showDeflagSelectionModal(
-                          context: context,
-                          documentId: flag['id'] ?? '',
-                          initialVehicleNumber: vehicle,
-                          initialLocation: '${flag['zone'] ?? ''}, ${flag['ward'] ?? ''}',
-                          lat: lat,
-                          lng: lng,
-                          ward: flag['ward'],
-                          zone: flag['zone'],
-                        );
-                      },
-                      icon: const Icon(LucideIcons.camera, size: 16),
-                      label: const Text('Deflag Spot'),
-                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0F5132), foregroundColor: Colors.white),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ],
-        ),
-      ),
+    TrashFlagInspectionModal.showFromMap(
+      context,
+      flag,
+      onDeflag: isDeflagged
+          ? null
+          : () {
+              ComndDeflagScreen.showDeflagSelectionModal(
+                context: context,
+                documentId: flag['id'] ?? '',
+                initialVehicleNumber: vehicle.toString(),
+                initialLocation: '${flag['zone'] ?? ''}, ${flag['ward'] ?? ''}',
+                lat: lat,
+                lng: lng,
+                ward: flag['ward'],
+                zone: flag['zone'],
+              );
+            },
     );
   }
 
@@ -1346,49 +1356,6 @@ class _ComndScreenState extends State<ComndScreen> {
             data['id'] = d.id;
             return data;
           }).toList();
-        } else {
-          // Provide realistic initial complaints for testing if collection is empty
-          userComplaints = [
-            {
-              'id': 'CMP-10042',
-              'category': 'Garbage Dumped',
-              'lat': 12.9750,
-              'lng': 77.5980,
-              'status': 'In Progress',
-              'date': 'Yesterday, 14:30',
-              'image_url': 'https://images.unsplash.com/photo-1532996122724-e3c354a0b15b?auto=format&fit=crop&q=80',
-              'comment': 'Heavy trash dumped on the sidewalk near commercial street.',
-              'ward': 'Ward 01',
-              'zone': 'Central Zone',
-              'reportCount': 3,
-            },
-            {
-              'id': 'CMP-10021',
-              'category': 'Overflowing Bin',
-              'lat': 12.9700,
-              'lng': 77.5900,
-              'status': 'Resolved',
-              'date': 'Oct 12, 09:15',
-              'image_url': 'https://images.unsplash.com/photo-1605600659928-879857d47228?auto=format&fit=crop&q=80',
-              'comment': 'Public bin is overflowing and spilling onto the road.',
-              'ward': 'Ward 02',
-              'zone': 'East Zone',
-              'reportCount': 1,
-            },
-            {
-              'id': 'CMP-10065',
-              'category': 'Littered Plastic',
-              'lat': 12.9735,
-              'lng': 77.5960,
-              'status': 'In Progress',
-              'date': 'Today, 10:45',
-              'image_url': 'https://images.unsplash.com/photo-1515162816999-a0c47dc192f7?auto=format&fit=crop&q=80',
-              'comment': 'Plastic bottles scattered around bus stand entrance.',
-              'ward': 'Ward 01',
-              'zone': 'Central Zone',
-              'reportCount': 4,
-            },
-          ];
         }
 
         // Filter complaints by RoleService access and selected Zone/Ward
@@ -1476,6 +1443,21 @@ class _ComndScreenState extends State<ComndScreen> {
                       ),
                     ),
                     const SizedBox(width: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.grey.shade300),
+                        borderRadius: BorderRadius.circular(6),
+                        color: const Color(0xFFF8FAFC),
+                      ),
+                      child: Row(
+                        children: [
+                          const Text('Role: ', style: TextStyle(color: Color(0xFF64748B), fontSize: 12)),
+                          Text(RoleService.currentUserRoleTitle ?? 'None', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.black)),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 10),
                     _buildFilterChip('All', _complaintStatusFilter == 'All', () => setState(() => _complaintStatusFilter = 'All')),
                     const SizedBox(width: 6),
                     _buildFilterChip('Pending', _complaintStatusFilter == 'In Progress', () => setState(() => _complaintStatusFilter = 'In Progress'), activeColor: const Color(0xFFF59E0B)),
@@ -1490,7 +1472,26 @@ class _ComndScreenState extends State<ComndScreen> {
 
             // Complaints List
             Expanded(
-              child: ListView.builder(
+              child: displayedComplaints.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(LucideIcons.messageSquare, size: 48, color: Colors.grey.shade400),
+                          const SizedBox(height: 12),
+                          const Text(
+                            'No citizen complaints found',
+                            style: TextStyle(color: Colors.black87, fontWeight: FontWeight.bold, fontSize: 16),
+                          ),
+                          const SizedBox(height: 4),
+                          const Text(
+                            'Reports submitted by citizens will appear here in real time.',
+                            style: TextStyle(color: Colors.black54, fontSize: 13),
+                          ),
+                        ],
+                      ),
+                    )
+                  : ListView.builder(
                 padding: EdgeInsets.symmetric(horizontal: isMobile ? 12 : 20, vertical: 8),
                 itemCount: displayedComplaints.length,
                 itemBuilder: (context, index) {
@@ -1501,9 +1502,12 @@ class _ComndScreenState extends State<ComndScreen> {
                   final lng = ((complaint['lng'] ?? 0.0) as num).toDouble();
 
                   return Card(
+                    color: Colors.white,
+                    surfaceTintColor: Colors.transparent,
                     margin: const EdgeInsets.only(bottom: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14), side: const BorderSide(color: Color(0xFFE2E8F0))),
                     elevation: 1.5,
+                    shadowColor: Colors.black.withOpacity(0.04),
                     child: Padding(
                       padding: const EdgeInsets.all(14),
                       child: Row(
@@ -1517,7 +1521,7 @@ class _ComndScreenState extends State<ComndScreen> {
                                 width: 85,
                                 height: 85,
                                 fit: BoxFit.cover,
-                                errorBuilder: (_, __, ___) => Container(width: 85, height: 85, color: Colors.grey.shade200, child: const Icon(Icons.broken_image)),
+                                errorBuilder: (_, __, ___) => Container(width: 85, height: 85, color: const Color(0xFFF1F5F9), child: const Icon(Icons.broken_image, color: Color(0xFF94A3B8))),
                               ),
                             ),
                             const SizedBox(width: 12),

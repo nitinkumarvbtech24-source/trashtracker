@@ -6,6 +6,7 @@ import 'dashboard_screen.dart';
 import 'fleet_screen.dart';
 import 'cleanliness_screen.dart';
 import 'health_screen.dart';
+import 'reports_screen.dart';
 import 'settings_screen.dart';
 import 'roles_access_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -193,7 +194,7 @@ class _MainLayoutState extends State<MainLayout> {
     const ComndScreen(), // 3
     const CleanlinessScreen(), // 4
     const HealthScreen(), // 5
-    const Scaffold(body: Center(child: Text('Reports Screen'))), // 6
+    const ReportsScreen(), // 6
     const SettingsScreen(), // 7
   ];
 
@@ -226,85 +227,114 @@ class _MainLayoutState extends State<MainLayout> {
   }
 
   Widget _buildTopAppBar(bool isMobile) {
+    final titleWidget = Text(
+      _getAppBarTitle().toUpperCase(),
+      style: TextStyle(
+        color: Colors.white,
+        fontSize: isMobile ? 16 : 20,
+        fontWeight: FontWeight.bold,
+        letterSpacing: 1.2,
+      ),
+      textAlign: isMobile ? TextAlign.left : TextAlign.center,
+      overflow: TextOverflow.ellipsis,
+    );
+
     return Container(
       color: const Color(0xFF0F5132),
-      padding: EdgeInsets.symmetric(horizontal: isMobile ? 12 : 24, vertical: 16),
-      child: Row(
-        children: [
-          IconButton(
-            onPressed: () {
-              if (isMobile) {
-                _scaffoldKey.currentState?.openDrawer();
-              } else {
-                setState(() {
-                  _isSidebarOpen = !_isSidebarOpen;
-                });
-              }
-            },
-            icon: const Icon(LucideIcons.menu, color: Colors.white, size: 28),
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
-          ),
-          if (!isMobile) const Expanded(child: SizedBox()), // Spacer to center title
-          if (isMobile) const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              _getAppBarTitle().toUpperCase(),
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: isMobile ? 16 : 20,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 1.2,
-              ),
-              textAlign: isMobile ? TextAlign.left : TextAlign.center,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          IconButton(
-            tooltip: 'AI Model Settings',
-            onPressed: _showAISettingsDialog,
-            icon: const Icon(LucideIcons.sliders, color: Colors.white, size: 22),
-          ),
-          const SizedBox(width: 8),
-          // Interactive Area-Scoped Notification Bell
-          IconButton(
-            tooltip: 'Area Notifications',
-            onPressed: _showNotificationsSheet,
-            icon: Stack(
-              clipBehavior: Clip.none,
+      padding: EdgeInsets.symmetric(horizontal: isMobile ? 12 : 24, vertical: 14),
+      child: isMobile
+          ? Row(
               children: [
-                const Icon(LucideIcons.bell, color: Colors.white, size: 24),
-                if (_unreadCount > 0)
-                  Positioned(
-                    right: -4,
-                    top: -4,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFEF4444),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: Colors.white, width: 1.5),
-                        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
-                      ),
-                      constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
-                      child: Text(
-                        _unreadCount > 9 ? '9+' : '$_unreadCount',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 9,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
+                IconButton(
+                  onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+                  icon: const Icon(LucideIcons.menu, color: Colors.white, size: 28),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                ),
+                const SizedBox(width: 12),
+                Expanded(child: titleWidget),
+                _buildTopAppBarActions(),
+              ],
+            )
+          : Stack(
+              alignment: Alignment.center,
+              children: [
+                // Centered Screen Heading
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 160),
+                    child: titleWidget,
                   ),
+                ),
+                // Left & Right Controls
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    IconButton(
+                      onPressed: () {
+                        setState(() {
+                          _isSidebarOpen = !_isSidebarOpen;
+                        });
+                      },
+                      icon: const Icon(LucideIcons.menu, color: Colors.white, size: 28),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+                    _buildTopAppBarActions(),
+                  ],
+                ),
               ],
             ),
+    );
+  }
+
+  Widget _buildTopAppBarActions() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          tooltip: 'AI Model Settings',
+          onPressed: _showAISettingsDialog,
+          icon: const Icon(LucideIcons.sliders, color: Colors.white, size: 22),
+        ),
+        const SizedBox(width: 8),
+        IconButton(
+          tooltip: 'Area Notifications',
+          onPressed: _showNotificationsSheet,
+          icon: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              const Icon(LucideIcons.bell, color: Colors.white, size: 24),
+              if (_unreadCount > 0)
+                Positioned(
+                  right: -4,
+                  top: -4,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEF4444),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.white, width: 1.5),
+                      boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
+                    ),
+                    constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                    child: Text(
+                      _unreadCount > 9 ? '9+' : '$_unreadCount',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+            ],
           ),
-          const SizedBox(width: 8),
-          const Icon(LucideIcons.userCircle, color: Colors.white, size: 24),
-        ],
-      ),
+        ),
+        const SizedBox(width: 8),
+        const Icon(LucideIcons.userCircle, color: Colors.white, size: 24),
+      ],
     );
   }
 

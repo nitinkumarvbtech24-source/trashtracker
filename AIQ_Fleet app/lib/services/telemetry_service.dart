@@ -117,22 +117,22 @@ class TelemetryService extends ChangeNotifier {
     if (defaultTargetPlatform == TargetPlatform.android) {
       locationSettings = AndroidSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 5,
-        forceLocationManager: true,
+        distanceFilter: 4,
+        forceLocationManager: false, // Use Google Play Services Fused Location Provider for sensor-fused road following
         intervalDuration: const Duration(seconds: 1),
       );
     } else if (defaultTargetPlatform == TargetPlatform.iOS || defaultTargetPlatform == TargetPlatform.macOS) {
       locationSettings = AppleSettings(
         accuracy: LocationAccuracy.high,
         activityType: ActivityType.fitness,
-        distanceFilter: 0,
+        distanceFilter: 4,
         pauseLocationUpdatesAutomatically: true,
         showBackgroundLocationIndicator: true,
       );
     } else {
       locationSettings = const LocationSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 0,
+        distanceFilter: 4,
       );
     }
 
@@ -140,14 +140,31 @@ class TelemetryService extends ChangeNotifier {
     _positionStream = Geolocator.getPositionStream(
       locationSettings: locationSettings,
     ).listen((Position position) {
-      _updateAddress(position);
-      
+      // 1. Accuracy Filter: discard poor/drifted satellite fixes (> 18m error)
+      // This stops coordinates from jumping into buildings or onto parallel overpasses/underpasses
+      if (position.accuracy > 18.0) {
+        return;
+      }
+
       // Calculate Distance if navigating
       if (_isNavigating && _currentPosition != null) {
         final dist = Geolocator.distanceBetween(
           _currentPosition!.latitude, _currentPosition!.longitude,
           position.latitude, position.longitude
         );
+
+        // 2. Stationary / Idle Jitter Filter:
+        // When vehicle is stopped (< 0.6 m/s) and moved < 5m, it is GPS clock noise, not vehicle movement
+        if (position.speed < 0.6 && dist < 5.0) {
+          return;
+        }
+
+        // 3. Teleportation / jump spike filter (> 100m in 1-2s):
+        if (dist > 100.0) {
+          _currentPosition = position;
+          return;
+        }
+
         _totalDistanceMeters += dist;
         tripDistanceMeters += dist;
         if (currentTripId != null && _dailyRoute.length % 5 == 0) {
@@ -166,6 +183,7 @@ class TelemetryService extends ChangeNotifier {
       }
       
       _currentPosition = position;
+      _updateAddress(position);
       
       // Save to local DB for syncing
       DatabaseService().insertTelemetry(
@@ -188,6 +206,7 @@ class TelemetryService extends ChangeNotifier {
             'lat': position.latitude,
             'lng': position.longitude,
             'speed': position.speed,
+            'accuracy': position.accuracy,
             'timestamp': FieldValue.serverTimestamp(),
             'isActive': _isNavigating,
           }, SetOptions(merge: true));
@@ -197,11 +216,6 @@ class TelemetryService extends ChangeNotifier {
               .collection('daily_stats').doc(_todayDateString)
               .set({
                 'distance_km': _totalDistanceMeters / 1000.0,
-                'route': FieldValue.arrayUnion([{
-                  'lat': position.latitude,
-                  'lng': position.longitude,
-                  'timestamp': position.timestamp.millisecondsSinceEpoch,
-                }]),
                 'last_updated': FieldValue.serverTimestamp(),
               }, SetOptions(merge: true));
           }

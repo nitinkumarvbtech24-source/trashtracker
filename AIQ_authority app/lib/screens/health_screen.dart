@@ -16,10 +16,12 @@ import '../mock_data.dart';
 import '../services/map_cache_service.dart';
 import '../models/vehicle.dart';
 import '../models/ward.dart';
+import '../models/trail_segment.dart';
 import 'active_fleet_screen.dart';
 import 'health_database_screen.dart';
 import 'alerts_screen.dart';
 import '../services/ward_zone_service.dart';
+import '../services/role_service.dart';
 
 class HealthFlag {
   final String id;
@@ -106,6 +108,8 @@ class _HealthScreenState extends State<HealthScreen> {
   final MapController _mapController = MapController();
   Vehicle? _selectedVehicle;
   Ward? _selectedWard;
+  String _selectedZone = 'All Zones';
+  DateTime _selectedDate = DateTime.now();
   
   bool _isDailyView = true;
   
@@ -116,6 +120,7 @@ class _HealthScreenState extends State<HealthScreen> {
   StreamSubscription? _liveTrackingSub;
   StreamSubscription? _vehiclesSub;
   StreamSubscription? _wardsSub;
+  StreamSubscription? _trashSub;
 
   List<HealthFlag> _healthFlags = [];
   Timer? _healthTimer;
@@ -125,8 +130,79 @@ class _HealthScreenState extends State<HealthScreen> {
   Map<String, dynamic>? _selectedVehicleStats;
   List<LatLng> _selectedVehicleRoute = [];
 
-  StreamSubscription<QuerySnapshot>? _trashSub;
-  List<Polyline> _snappedPolylines = [];
+  final Map<String, StreamSubscription> _vehicleDailyStatsSubs = {};
+  final Map<String, List<Polyline>> _vehicleTrails = {};
+  List<Polyline> _selectedVehiclePolylines = [];
+  StreamSubscription? _selectedVehicleStatsSub;
+
+  double _currentMapZoom = 13.0;
+  List<Marker> _cachedHealthMarkers = [];
+  int _cachedHealthCount = -1;
+  String _cachedMarkerFilterKey = '';
+
+  List<Marker> _getOrCreateHealthMarkers(List<HealthFlag> flags) {
+    final filterKey = '${flags.length}_${_selectedWard?.name}';
+    if (_cachedHealthCount == flags.length && _cachedMarkerFilterKey == filterKey && _cachedHealthMarkers.isNotEmpty) {
+      return _cachedHealthMarkers;
+    }
+
+    final List<Marker> markers = [];
+    Map<String, int> locationCounts = {};
+    for (var flag in flags) {
+      String locKey = '${flag.lat.toStringAsFixed(5)}_${flag.lng.toStringAsFixed(5)}';
+      int count = locationCounts[locKey] ?? 0;
+      locationCounts[locKey] = count + 1;
+
+      double offsetLat = flag.lat;
+      double offsetLng = flag.lng;
+      if (count > 0) {
+        offsetLng += (count * 0.0002);
+      }
+
+      if (flag.pointType == 'start') {
+        markers.add(Marker(
+          point: LatLng(offsetLat, offsetLng),
+          width: 30, height: 30,
+          alignment: Alignment.center,
+          child: const Icon(Icons.play_circle_fill, color: Colors.greenAccent, size: 28),
+        ));
+      } else if (flag.pointType == 'end') {
+        markers.add(Marker(
+          point: LatLng(offsetLat, offsetLng),
+          width: 30, height: 30,
+          alignment: Alignment.center,
+          child: const Icon(Icons.stop_circle, color: Colors.redAccent, size: 28),
+        ));
+      }
+
+      if (flag.className != 'Clean' &&
+          flag.className != 'Good_Condition' &&
+          flag.displayClass != 'Good Condition' &&
+          flag.pointType != 'intermediate') {
+        Color markerColor = (flag.className == 'Pothole_Detected' || flag.displayClass == 'Pothole Detected') ? Colors.redAccent : Colors.orangeAccent;
+        
+        markers.add(Marker(
+          point: LatLng(offsetLat, offsetLng),
+          width: 40, height: 40,
+          alignment: Alignment.bottomCenter,
+          child: GestureDetector(
+            onTap: () => _showTrashPopup(flag),
+            child: Icon(
+              Icons.tour_rounded,
+              color: markerColor,
+              size: 32,
+              shadows: const [Shadow(color: Colors.black54, blurRadius: 4, offset: Offset(0, 2))],
+            ),
+          ),
+        ));
+      }
+    }
+
+    _cachedHealthCount = flags.length;
+    _cachedMarkerFilterKey = filterKey;
+    _cachedHealthMarkers = markers;
+    return _cachedHealthMarkers;
+  }
 
   @override
   void initState() {
@@ -149,64 +225,71 @@ class _HealthScreenState extends State<HealthScreen> {
       setState(() {
         _healthFlags = snapshot.docs
             .map((doc) => HealthFlag.fromJson(doc.data(), doc.id))
-            .where((f) => f.status != 'Resolved' && (f.className == 'Pothole_Detected' || f.displayClass == 'Pothole Detected' || f.className == 'Bad_Road' || f.displayClass == 'Bad Road'))
             .toList();
       });
-      _recalculatePolylines();
     });
   }
 
-  Future<void> _recalculatePolylines() async {
-    Map<String, List<HealthFlag>> sessions = {};
-    for (var flag in _healthFlags) {
-      if (flag.sessionId != null) {
-        sessions.putIfAbsent(flag.sessionId!, () => []).add(flag);
-      }
-    }
-
-    List<Polyline> newPolylines = [];
-
-    for (var list in sessions.values) {
-      list.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-      for (int i = 0; i < list.length - 1; i++) {
-        final start = LatLng(list[i].lat, list[i].lng);
-        final end = LatLng(list[i + 1].lat, list[i + 1].lng);
-        final dist = const Distance().as(LengthUnit.Meter, start, end);
-        if (dist > 80.0) continue; // Never connect distant spots
-        final status = list[i + 1].className;
-        
-        Color segmentColor = Colors.greenAccent;
-        if (status == 'Pothole_Detected' || status == 'Pothole Detected') segmentColor = Colors.redAccent;
-        else if (status == 'Bad_Road' || status == 'Bad Road') segmentColor = Colors.orangeAccent;
-
-        try {
-          final url = 'https://router.project-osrm.org/route/v1/driving/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=geojson';
-          final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 3));
-          if (response.statusCode == 200) {
-            final data = json.decode(response.body);
-            if (data['routes'] != null && data['routes'].isNotEmpty) {
-              final coords = data['routes'][0]['geometry']['coordinates'] as List;
-              final snappedPoints = coords.map((c) => LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble())).toList();
-              if (snappedPoints.length >= 2) {
-                newPolylines.add(Polyline(points: snappedPoints, color: segmentColor, strokeWidth: 6.0));
-                continue;
+  void _syncVehicleTrails(List<Vehicle> vehicles) {
+    for (var v in vehicles) {
+      final vNum = v.vehicleNumber.isNotEmpty ? v.vehicleNumber : v.id;
+      if (!_vehicleDailyStatsSubs.containsKey(vNum)) {
+        _vehicleDailyStatsSubs[vNum] = FirebaseFirestore.instance
+            .collection('vehicles')
+            .doc(vNum)
+            .collection('daily_stats')
+            .doc(_todayDateString)
+            .snapshots()
+            .listen((doc) {
+          if (!mounted) return;
+          if (doc.exists && doc.data() != null) {
+            final polylines = TrailSegment.listFromDailyStats(doc.data());
+            setState(() {
+              _vehicleTrails[vNum] = polylines;
+              if (_selectedVehicle != null && (_selectedVehicle!.vehicleNumber == vNum || _selectedVehicle!.id == vNum)) {
+                _selectedVehiclePolylines = polylines;
               }
-            }
+            });
           }
-        } catch (_) {}
-        // Fallback: only connect if close together (<= 25m)
-        if (dist <= 25.0) {
-          newPolylines.add(Polyline(points: [start, end], color: segmentColor, strokeWidth: 6.0));
-        }
+        }, onError: (_) {});
       }
-    }
-
-    if (mounted) {
-      setState(() {
-        _snappedPolylines = newPolylines;
-      });
     }
   }
+
+  void _selectVehicle(Vehicle vehicle) {
+    final vNum = vehicle.vehicleNumber.isNotEmpty ? vehicle.vehicleNumber : vehicle.id;
+    setState(() {
+      _selectedVehicle = vehicle;
+      _selectedVehiclePolylines = _vehicleTrails[vNum] ?? [];
+    });
+    if (vehicle.currentLocation != null) {
+      _mapController.move(vehicle.currentLocation!, 15.5);
+    }
+    _selectedVehicleStatsSub?.cancel();
+    _selectedVehicleStatsSub = FirebaseFirestore.instance
+        .collection('vehicles')
+        .doc(vNum)
+        .collection('daily_stats')
+        .doc(_todayDateString)
+        .snapshots()
+        .listen((doc) {
+      if (!mounted) return;
+      if (doc.exists && doc.data() != null) {
+        setState(() {
+          _selectedVehiclePolylines = TrailSegment.listFromDailyStats(doc.data());
+        });
+      }
+    }, onError: (_) {});
+  }
+
+  void _clearVehicleSelection() {
+    setState(() {
+      _selectedVehicle = null;
+      _selectedVehiclePolylines = [];
+    });
+    _selectedVehicleStatsSub?.cancel();
+  }
+
 
   void _fetchDataFromFirestore() {
     _vehiclesSub = FirebaseFirestore.instance.collection('vehicles').snapshots().listen((snapshot) {
@@ -243,6 +326,7 @@ class _HealthScreenState extends State<HealthScreen> {
           }
         }
         _vehicles = vehicles;
+        _syncVehicleTrails(vehicles);
         if (_selectedVehicle != null) {
           final index = _vehicles.indexWhere((v) => v.id == _selectedVehicle!.id);
           if (index != -1) _selectedVehicle = _vehicles[index];
@@ -301,6 +385,10 @@ class _HealthScreenState extends State<HealthScreen> {
   @override
   void dispose() {
     WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
+    for (var sub in _vehicleDailyStatsSubs.values) {
+      sub.cancel();
+    }
+    _selectedVehicleStatsSub?.cancel();
     _healthTimer?.cancel();
     _liveTrackingSub?.cancel();
     _vehiclesSub?.cancel();
@@ -323,10 +411,82 @@ class _HealthScreenState extends State<HealthScreen> {
     }
   }
 
-  int get _spotsCleared => _healthFlags.where((f) => f.className == 'Good_Condition' || f.displayClass == 'Good Condition').length;
-  int get _spotsFlagged => _healthFlags.where((f) => f.className == 'Slightly_Dirty' || f.className == 'Very_Dirty').length;
-  int get _totalSpots => _healthFlags.length;
-  int get _overallCleanliness => _totalSpots > 0 ? ((_spotsCleared / _totalSpots) * 100).toInt() : 100;
+  List<HealthFlag> get _filteredHealthFlags {
+    return _healthFlags.where((f) {
+      if (!RoleService.isSpotAllowed(f.lat, f.lng, null, f.ward, 'Road Health Monitor AI')) {
+        return false;
+      }
+      if (_selectedZone != 'All Zones') {
+        if (!WardZoneService.instance.matchesZone(lat: f.lat, lng: f.lng, docZone: null, targetZone: _selectedZone)) {
+          return false;
+        }
+      }
+      if (_selectedWard != null &&
+          _selectedWard!.name != 'All Wards' &&
+          !WardZoneService.instance.matchesWard(lat: f.lat, lng: f.lng, docWard: f.ward, targetWard: _selectedWard!.name)) {
+        return false;
+      }
+      return true;
+    }).toList();
+  }
+
+  void _updateMapForSelection() {
+    if (_selectedWard != null && _selectedWard!.name != 'All Wards' && _selectedWard!.boundary.isNotEmpty) {
+      double minLat = 90.0, maxLat = -90.0, minLng = 180.0, maxLng = -180.0;
+      for (var p in _selectedWard!.boundary) {
+        if (p.latitude < minLat) minLat = p.latitude;
+        if (p.latitude > maxLat) maxLat = p.latitude;
+        if (p.longitude < minLng) minLng = p.longitude;
+        if (p.longitude > maxLng) maxLng = p.longitude;
+      }
+      final centerLat = (minLat + maxLat) / 2;
+      final centerLng = (minLng + maxLng) / 2;
+      _mapController.move(LatLng(centerLat, centerLng), 15.2);
+    } else if (_selectedZone != 'All Zones') {
+      try {
+        final z = WardZoneService.instance.zones.firstWhere((zm) => zm.name == _selectedZone);
+        if (z.boundary.isNotEmpty) {
+          double minLat = 90.0, maxLat = -90.0, minLng = 180.0, maxLng = -180.0;
+          for (var p in z.boundary) {
+            if (p.latitude < minLat) minLat = p.latitude;
+            if (p.latitude > maxLat) maxLat = p.latitude;
+            if (p.longitude < minLng) minLng = p.longitude;
+            if (p.longitude > maxLng) maxLng = p.longitude;
+          }
+          final centerLat = (minLat + maxLat) / 2;
+          final centerLng = (minLng + maxLng) / 2;
+          _mapController.move(LatLng(centerLat, centerLng), 12.5);
+          return;
+        }
+      } catch (_) {}
+      _mapController.move(const LatLng(12.9716, 77.5946), 12.5);
+    } else {
+      _mapController.move(const LatLng(12.9716, 77.5946), 11.8);
+    }
+  }
+
+  int get _spotsCleared => _filteredHealthFlags.where((f) =>
+    f.className.toLowerCase().contains('good') ||
+    f.displayClass.toLowerCase().contains('good') ||
+    f.status == 'Resolved' ||
+    f.status == 'Deflagged'
+  ).length;
+
+  int get _spotsFlagged => _filteredHealthFlags.where((f) =>
+    (f.className.toLowerCase().contains('pothole') ||
+     f.className.toLowerCase().contains('bad') ||
+     f.displayClass.toLowerCase().contains('pothole') ||
+     f.displayClass.toLowerCase().contains('bad')) &&
+    f.status != 'Resolved' &&
+    f.status != 'Deflagged'
+  ).length;
+
+  int get _totalSpots => _filteredHealthFlags.length;
+
+  int get _overallCleanliness {
+    if (_totalSpots == 0) return 100;
+    return ((_spotsCleared / _totalSpots) * 100).toInt();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -357,10 +517,260 @@ class _HealthScreenState extends State<HealthScreen> {
         },
       ),
       body: Padding(
-        padding: EdgeInsets.all(isDesktop ? 24 : 12),
-        child: isDesktop ? _buildDesktopLayout() : _buildMobileLayout(),
+        padding: EdgeInsets.fromLTRB(isDesktop ? 24 : 12, isDesktop ? 24 : 12, isDesktop ? 24 : 12, 0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildFilterBar(isDesktop),
+            const SizedBox(height: 16),
+            Expanded(
+              child: isDesktop ? _buildDesktopLayout() : _buildMobileLayout(),
+            ),
+          ],
+        ),
       ),
     );
+  }
+
+  Widget _buildFilterBar(bool isDesktop) {
+    final bool hasAllAccess = RoleService.hasAllAccess('Road Health Monitor AI');
+    final List<String> allowedZones = RoleService.getAllowedZonesForModule('Road Health Monitor AI');
+    final List<String> allowedWards = RoleService.getAllowedWardsForModule('Road Health Monitor AI');
+
+    final allZoneModels = WardZoneService.instance.zones;
+    final allWardModels = WardZoneService.instance.wards;
+
+    List<String> zItems = (hasAllAccess ? allZoneModels.map((z) => z.name).toList() : allowedZones).toList();
+    if (zItems.length > 1 && !zItems.contains('All Zones')) {
+      zItems.insert(0, 'All Zones');
+    }
+    final zones = zItems.isEmpty ? ['All Zones'] : zItems;
+
+    String validSelectedZone = _selectedZone;
+    if (!zones.contains(validSelectedZone) && zones.isNotEmpty) {
+      validSelectedZone = zones.first;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _selectedZone != validSelectedZone) {
+          setState(() {
+            _selectedZone = validSelectedZone;
+            _updateMapForSelection();
+          });
+        }
+      });
+    }
+
+    List<String> wItems = allWardModels.where((w) {
+      if (!hasAllAccess && !allowedWards.contains('All Wards') && !allowedWards.contains(w.name)) return false;
+      if (validSelectedZone == 'All Zones') return true;
+      try {
+        final z = allZoneModels.firstWhere((zm) => zm.name == validSelectedZone);
+        return WardZoneService.instance.isWardInZone(w, z);
+      } catch (_) { return false; }
+    }).map((w) => w.name).toList();
+
+    if (wItems.length > 1 && !wItems.contains('All Wards')) {
+      wItems.insert(0, 'All Wards');
+    }
+    final wards = wItems.isEmpty ? ['All Wards'] : wItems;
+
+    String currentWardName = _selectedWard?.name ?? 'All Wards';
+    if (!wards.contains(currentWardName) && wards.isNotEmpty) {
+      currentWardName = wards.first;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          setState(() {
+            _selectedWard = currentWardName == 'All Wards' ? null : allWardModels.firstWhere((w) => w.name == currentWardName, orElse: () => Ward(id: '', name: currentWardName, boundary: []));
+            _updateMapForSelection();
+          });
+        }
+      });
+    }
+
+    final dateStr = "${_selectedDate.day} ${_monthString(_selectedDate.month)} ${_selectedDate.year}";
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))],
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey.shade300),
+                borderRadius: BorderRadius.circular(6),
+                color: const Color(0xFFF8FAFC),
+              ),
+              child: Row(
+                children: [
+                  const Text('Role: ', style: TextStyle(color: Color(0xFF64748B), fontSize: 14)),
+                  Text(RoleService.currentUserRoleTitle ?? 'None', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black)),
+                ],
+              ),
+            ),
+            const SizedBox(width: 16),
+            _buildDropdown('Zone', validSelectedZone, zones, (val) {
+              setState(() {
+                _selectedZone = val;
+                _selectedWard = null;
+              });
+              _updateMapForSelection();
+            }),
+            const SizedBox(width: 16),
+            _buildDropdown('Ward', currentWardName, wards, (val) {
+              setState(() {
+                _selectedWard = val == 'All Wards' ? null : allWardModels.firstWhere((w) => w.name == val, orElse: () => Ward(id: '', name: val, boundary: []));
+              });
+              _updateMapForSelection();
+            }),
+            const SizedBox(width: 24),
+            Row(
+              children: [
+                Container(width: 8, height: 8, decoration: const BoxDecoration(color: Color(0xFF198754), shape: BoxShape.circle)),
+                const SizedBox(width: 8),
+                const Text('Live Tracking', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+              ],
+            ),
+            const SizedBox(width: 12),
+            Text(
+              'Last updated: ${TimeOfDay.now().format(context)}',
+              style: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
+            ),
+            const SizedBox(width: 20),
+            // Date Picker
+            GestureDetector(
+              onTap: () async {
+                final DateTime? picked = await showDatePicker(
+                  context: context,
+                  initialDate: _selectedDate,
+                  firstDate: DateTime(2020),
+                  lastDate: DateTime(2101),
+                  builder: (context, child) {
+                    return Theme(
+                      data: Theme.of(context).copyWith(
+                        colorScheme: const ColorScheme.light(
+                          primary: Color(0xFF0F5132),
+                          onPrimary: Colors.white,
+                          onSurface: Colors.black,
+                        ),
+                      ),
+                      child: child!,
+                    );
+                  },
+                );
+                if (picked != null && picked != _selectedDate) {
+                  setState(() => _selectedDate = picked);
+                }
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFFE2E8F0)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Date', style: TextStyle(fontSize: 10, color: Color(0xFF64748B))),
+                        const SizedBox(height: 2),
+                        Row(
+                          children: [
+                            const Icon(LucideIcons.calendar, size: 14, color: Color(0xFF1E293B)),
+                            const SizedBox(width: 6),
+                            Text(dateStr, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Color(0xFF1E293B))),
+                          ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(width: 16),
+                    const Icon(Icons.keyboard_arrow_down, color: Color(0xFF64748B)),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 20),
+            // Daily / Monthly Toggle
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  GestureDetector(
+                    onTap: () => setState(() => _isDailyView = true),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: _isDailyView ? const Color(0xFF0F5132) : Colors.transparent,
+                        borderRadius: const BorderRadius.only(topLeft: Radius.circular(7), bottomLeft: Radius.circular(7)),
+                      ),
+                      child: Text('Daily', style: TextStyle(color: _isDailyView ? Colors.white : const Color(0xFF4B5563), fontWeight: FontWeight.bold, fontSize: 13)),
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: () => setState(() => _isDailyView = false),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: !_isDailyView ? const Color(0xFF0F5132) : Colors.transparent,
+                        borderRadius: const BorderRadius.only(topRight: Radius.circular(7), bottomRight: Radius.circular(7)),
+                      ),
+                      child: Text('Monthly', style: TextStyle(color: !_isDailyView ? Colors.white : const Color(0xFF4B5563), fontWeight: FontWeight.bold, fontSize: 13)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDropdown(String label, String value, List<String> items, Function(String) onChanged) {
+    return PopupMenuButton<String>(
+      onSelected: onChanged,
+      itemBuilder: (context) => items.map((item) => PopupMenuItem(value: item, child: Text(item))).toList(),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          border: Border.all(color: const Color(0xFFE2E8F0)),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          children: [
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label, style: const TextStyle(fontSize: 10, color: Color(0xFF64748B))),
+                const SizedBox(height: 2),
+                Text(value, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+              ],
+            ),
+            const SizedBox(width: 20),
+            const Icon(Icons.keyboard_arrow_down, color: Color(0xFF64748B)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _monthString(int month) {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return months[month - 1];
   }
 
   Widget _buildTopCards(bool isDesktop) {
@@ -496,7 +906,7 @@ class _HealthScreenState extends State<HealthScreen> {
   }
 
   Widget _buildMonitoredCard(bool isMobile) {
-    int total = _totalSpots == 0 ? 120 : _totalSpots;
+    int total = _totalSpots;
     return _buildBaseCard(
       isMobile: isMobile,
       child: Row(
@@ -640,15 +1050,25 @@ class _HealthScreenState extends State<HealthScreen> {
   }
 
   Widget _buildPieChartCard() {
-    double total = _healthFlags.isEmpty ? 1 : _healthFlags.length.toDouble();
-    double cleanVal = _healthFlags.where((f) => f.className == 'Good_Condition' || f.displayClass == 'Good Condition').length.toDouble();
-    double slightVal = _healthFlags.where((f) => f.className == 'Slightly_Dirty' || f.className == 'Bad_Road' || f.displayClass == 'Bad Road').length.toDouble();
-    double dirtyVal = _healthFlags.where((f) => f.className == 'Pothole_Detected' || f.displayClass == 'Pothole Detected').length.toDouble();
+    final flags = _filteredHealthFlags;
+    double cleanVal = flags.where((f) =>
+      f.className.toLowerCase().contains('good') ||
+      f.displayClass.toLowerCase().contains('good') ||
+      f.status == 'Resolved' ||
+      f.status == 'Deflagged'
+    ).length.toDouble();
+    double slightVal = flags.where((f) =>
+      (f.className.toLowerCase().contains('bad') || f.displayClass.toLowerCase().contains('bad')) &&
+      f.status != 'Resolved' &&
+      f.status != 'Deflagged'
+    ).length.toDouble();
+    double dirtyVal = flags.where((f) =>
+      (f.className.toLowerCase().contains('pothole') || f.displayClass.toLowerCase().contains('pothole')) &&
+      f.status != 'Resolved' &&
+      f.status != 'Deflagged'
+    ).length.toDouble();
 
-    if (cleanVal == 0 && slightVal == 0 && dirtyVal == 0) {
-      cleanVal = 1; 
-      total = 1;
-    }
+    double total = cleanVal + slightVal + dirtyVal;
 
     return Container(
       height: 320,
@@ -674,32 +1094,41 @@ class _HealthScreenState extends State<HealthScreen> {
                     PieChartData(
                       sectionsSpace: 2,
                       centerSpaceRadius: 30,
-                      sections: [
-                        if (cleanVal > 0)
-                          PieChartSectionData(
-                            color: Colors.green,
-                            value: cleanVal,
-                            title: '${((cleanVal / total) * 100).toInt()}%',
-                            radius: 40,
-                            titleStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
-                          ),
-                        if (slightVal > 0)
-                          PieChartSectionData(
-                            color: Colors.orange,
-                            value: slightVal,
-                            title: '${((slightVal / total) * 100).toInt()}%',
-                            radius: 40,
-                            titleStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
-                          ),
-                        if (dirtyVal > 0)
-                          PieChartSectionData(
-                            color: Colors.redAccent,
-                            value: dirtyVal,
-                            title: '${((dirtyVal / total) * 100).toInt()}%',
-                            radius: 40,
-                            titleStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
-                          ),
-                      ],
+                      sections: total == 0
+                          ? [
+                              PieChartSectionData(
+                                color: Colors.grey.shade200,
+                                value: 1,
+                                showTitle: false,
+                                radius: 36,
+                              ),
+                            ]
+                          : [
+                              if (cleanVal > 0)
+                                PieChartSectionData(
+                                  color: Colors.green,
+                                  value: cleanVal,
+                                  title: '${((cleanVal / total) * 100).toInt()}%',
+                                  radius: 40,
+                                  titleStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
+                                ),
+                              if (slightVal > 0)
+                                PieChartSectionData(
+                                  color: Colors.orange,
+                                  value: slightVal,
+                                  title: '${((slightVal / total) * 100).toInt()}%',
+                                  radius: 40,
+                                  titleStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
+                                ),
+                              if (dirtyVal > 0)
+                                PieChartSectionData(
+                                  color: Colors.redAccent,
+                                  value: dirtyVal,
+                                  title: '${((dirtyVal / total) * 100).toInt()}%',
+                                  radius: 40,
+                                  titleStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
+                                ),
+                            ],
                     ),
                   ),
                 ),
@@ -738,6 +1167,53 @@ class _HealthScreenState extends State<HealthScreen> {
   }
 
   Widget _buildLineGraphCard() {
+    final now = DateTime.now();
+    final dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    final List<Map<String, dynamic>> dayStats = List.generate(7, (i) {
+      final d = now.subtract(Duration(days: 6 - i));
+      final label = dayNames[d.weekday - 1];
+      final daySpots = _filteredHealthFlags.where((f) {
+        DateTime? dt;
+        try { dt = DateTime.parse(f.timestamp); } catch (_) {}
+        if (dt == null) return false;
+        return dt.year == d.year && dt.month == d.month && dt.day == d.day;
+      }).toList();
+
+      double health;
+      if (daySpots.isNotEmpty) {
+        final goodCount = daySpots.where((f) =>
+          f.className.toLowerCase().contains('good') ||
+          f.displayClass.toLowerCase().contains('good') ||
+          f.status == 'Resolved' ||
+          f.status == 'Deflagged'
+        ).length;
+        health = (goodCount / daySpots.length) * 100.0;
+      } else {
+        final cumSpots = _filteredHealthFlags.where((f) {
+          DateTime? dt;
+          try { dt = DateTime.parse(f.timestamp); } catch (_) {}
+          if (dt == null) return false;
+          return dt.isBefore(d.add(const Duration(days: 1)));
+        }).toList();
+
+        if (cumSpots.isNotEmpty) {
+          final goodCount = cumSpots.where((f) =>
+            f.className.toLowerCase().contains('good') ||
+            f.displayClass.toLowerCase().contains('good') ||
+            f.status == 'Resolved' ||
+            f.status == 'Deflagged'
+          ).length;
+          health = (goodCount / cumSpots.length) * 100.0;
+        } else {
+          health = 100.0;
+        }
+      }
+      return {
+        'label': label,
+        'value': health.clamp(0.0, 100.0),
+      };
+    });
+
     return Container(
       height: 320,
       padding: const EdgeInsets.all(20),
@@ -784,11 +1260,14 @@ class _HealthScreenState extends State<HealthScreen> {
                       showTitles: true,
                       reservedSize: 26,
                       getTitlesWidget: (value, meta) {
-                        const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-                        if (value.toInt() >= 0 && value.toInt() < days.length) {
+                        final idx = value.toInt();
+                        if (idx >= 0 && idx < dayStats.length) {
                           return Padding(
                             padding: const EdgeInsets.only(top: 6.0),
-                            child: Text(days[value.toInt()], style: TextStyle(color: Colors.grey.shade600, fontSize: 10)),
+                            child: Text(
+                              dayStats[idx]['label'] as String,
+                              style: TextStyle(color: Colors.grey.shade600, fontSize: 10),
+                            ),
                           );
                         }
                         return const Text('');
@@ -805,15 +1284,7 @@ class _HealthScreenState extends State<HealthScreen> {
                 maxY: 100,
                 lineBarsData: [
                   LineChartBarData(
-                    spots: const [
-                      FlSpot(0, 60),
-                      FlSpot(1, 65),
-                      FlSpot(2, 72),
-                      FlSpot(3, 80),
-                      FlSpot(4, 75),
-                      FlSpot(5, 82),
-                      FlSpot(6, 85),
-                    ],
+                    spots: List.generate(dayStats.length, (i) => FlSpot(i.toDouble(), dayStats[i]['value'] as double)),
                     isCurved: true,
                     color: const Color(0xFF0F5132),
                     barWidth: 3,
@@ -948,85 +1419,30 @@ class _HealthScreenState extends State<HealthScreen> {
   }
 
   Widget _buildMap() {
-    // --- Compute Polylines and Markers from _healthFlags ---
-    Map<String, List<HealthFlag>> sessions = {};
-    for (var flag in _healthFlags) {
-      if (flag.sessionId != null) {
-        sessions.putIfAbsent(flag.sessionId!, () => []).add(flag);
-      }
-    }
-
     List<Polyline> routePolylines = [];
-    List<Marker> customTrashMarkers = [];
 
-    // Process sessions into polylines for flags without a live route
-    if (_selectedVehicleRoute.isEmpty) {
-      routePolylines.addAll(_snappedPolylines);
+    // Real-time Vehicle Route Tracing & Road Health Color Mapping
+    if (_selectedVehicle != null) {
+      final vNum = _selectedVehicle!.vehicleNumber.isNotEmpty ? _selectedVehicle!.vehicleNumber : _selectedVehicle!.id;
+      final vehiclePolys = _selectedVehiclePolylines.isNotEmpty 
+          ? _selectedVehiclePolylines 
+          : (_vehicleTrails[vNum] ?? []);
+      routePolylines.addAll(vehiclePolys);
     } else {
-      routePolylines.add(Polyline(
-        points: _selectedVehicleRoute,
-        color: Colors.blueAccent,
-        strokeWidth: 6.0,
-      ));
-    }
-
-    // Process markers
-    Map<String, int> locationCounts = {};
-    for (var flag in _healthFlags) {
-      String locKey = '${flag.lat.toStringAsFixed(5)}_${flag.lng.toStringAsFixed(5)}';
-      int count = locationCounts[locKey] ?? 0;
-      locationCounts[locKey] = count + 1;
-
-      double offsetLat = flag.lat;
-      double offsetLng = flag.lng;
-      if (count > 0) {
-        offsetLng += (count * 0.0002);
-      }
-
-      if (flag.pointType == 'start') {
-        customTrashMarkers.add(Marker(
-          point: LatLng(offsetLat, offsetLng),
-          width: 30, height: 30,
-          alignment: Alignment.center,
-          child: const Icon(Icons.play_circle_fill, color: Colors.greenAccent, size: 28),
-        ));
-      } else if (flag.pointType == 'end') {
-        customTrashMarkers.add(Marker(
-          point: LatLng(offsetLat, offsetLng),
-          width: 30, height: 30,
-          alignment: Alignment.center,
-          child: const Icon(Icons.stop_circle, color: Colors.redAccent, size: 28),
-        ));
-      }
-
-      if (flag.className != 'Clean' && flag.pointType != 'intermediate') {
-        Color markerColor = (flag.className == 'Pothole_Detected' || flag.displayClass == 'Pothole Detected') ? Colors.redAccent : Colors.orangeAccent;
-        
-        customTrashMarkers.add(Marker(
-          point: LatLng(offsetLat, offsetLng),
-          width: 40, height: 40,
-          alignment: Alignment.bottomCenter,
-          child: GestureDetector(
-            onTap: () => _showTrashPopup(flag),
-            child: Icon(
-              Icons.tour_rounded,
-              color: markerColor,
-              size: 32,
-              shadows: const [Shadow(color: Colors.black54, blurRadius: 4, offset: Offset(0, 2))],
-            ),
-          ),
-        ));
+      for (var polylines in _vehicleTrails.values) {
+        routePolylines.addAll(polylines);
       }
     }
-    // ----------------------------------------------------
+
+    final customTrashMarkers = _getOrCreateHealthMarkers(_filteredHealthFlags);
 
     return Stack(
       children: [
         FlutterMap(
           mapController: _mapController,
-          options: MapOptions(
-            initialCenter: mapCenter,
-            initialZoom: mapZoom,
+          options: const MapOptions(
+            initialCenter: LatLng(12.9716, 77.5946),
+            initialZoom: 11.8,
           ),
           children: [
             TileLayer(
@@ -1037,48 +1453,12 @@ class _HealthScreenState extends State<HealthScreen> {
             ...WardZoneService.instance.buildLayers(
               selectedWard: _selectedWard?.name,
             ),
-            if (_selectedWard?.optimizedRoute != null)
-              PolylineLayer(
-                polylines: [
-                  Polyline(points: _selectedWard!.optimizedRoute!, strokeWidth: 5, color: const Color(0xFF10B981)),
-                ],
-              ),
             MarkerLayer(
               markers: _vehicles.where((v) => v.currentLocation != null).map((vehicle) {
                   return Marker(
                     point: vehicle.currentLocation!, width: 40, height: 40,
                     child: GestureDetector(
-                      onTap: () {
-                        setState(() {
-                          _selectedVehicle = vehicle;
-                          _selectedWard = _wards.where((w) => w.name == vehicle.assignedWard).firstOrNull;
-                          _selectedVehicleStats = null;
-                          _selectedVehicleRoute = [];
-                        });
-                        
-                        _dailyStatsSub?.cancel();
-                        _dailyStatsSub = FirebaseFirestore.instance.collection('vehicles').doc(vehicle.vehicleNumber).collection('daily_stats').doc(_todayDateString).snapshots().listen((doc) {
-                          if (doc.exists && doc.data() != null) {
-                            if (mounted) {
-                              setState(() {
-                                _selectedVehicleStats = doc.data()!;
-                                if (doc.data()!['route'] != null) {
-                                  final List<dynamic> rawRoute = doc.data()!['route'];
-                                  _selectedVehicleRoute = rawRoute.map((p) => LatLng(p['lat'], p['lng'])).toList();
-                                }
-                              });
-                            }
-                          }
-                        });
-
-                        if (_selectedWard != null && _selectedWard!.boundary.isNotEmpty) {
-                          _mapController.move(_selectedWard!.boundary.first, 15.0);
-                        } else if (vehicle.assignedRoute != null && vehicle.assignedRoute!.isNotEmpty) {
-                          _mapController.move(vehicle.assignedRoute!.first, 15.0);
-                        } else if (vehicle.currentLocation != null) {
-                          _mapController.move(vehicle.currentLocation!, 15.0);
-                        }
-                      },
+                      onTap: () => _selectVehicle(vehicle),
                       child: Column(
                         children: [
                           Container(
@@ -1105,10 +1485,21 @@ class _HealthScreenState extends State<HealthScreen> {
               PolylineLayer(
                 polylines: routePolylines,
               ),
-            if (customTrashMarkers.isNotEmpty)
-              MarkerLayer(
-                markers: customTrashMarkers,
-              ),
+            Builder(
+              builder: (context) {
+                final camera = MapCamera.of(context);
+                final hasSpecificWard = _selectedWard != null && _selectedWard!.name != 'All Wards';
+                final bool showPins = hasSpecificWard
+                    ? (camera.zoom >= 14.8)
+                    : (camera.zoom >= WardZoneService.individualWardPinsZoomThreshold);
+                if (!showPins || customTrashMarkers.isEmpty) {
+                  return const SizedBox.shrink();
+                }
+                return MarkerLayer(
+                  markers: customTrashMarkers,
+                );
+              },
+            ),
           ],
         ),
         if (_selectedVehicle != null)

@@ -1,8 +1,10 @@
 @echo off
-echo ==============================================
-echo   STARTING NGROK TUNNEL FOR AIQ V7 (Port 5001)
-echo ==============================================
-echo Tunnel Domain: https://pointer-staff-prodigy.ngrok-free.dev
+TITLE Cloudflare Tunnel & Mobile Auto-Sync
+echo ========================================================
+echo     STARTING CLOUDFLARE TUNNEL (AUTO-SYNC TO PHONE)
+echo ========================================================
 echo.
-ngrok http 5001 --domain=pointer-staff-prodigy.ngrok-free.dev
+cd /d "%~dp0"
+py -3.13 start_tunnel.py
 pause
+

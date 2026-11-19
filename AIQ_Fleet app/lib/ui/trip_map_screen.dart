@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../services/ward_zone_service.dart';
 import '../constants.dart';
 import '../widgets/trash_pinpoint_marker.dart';
 
@@ -22,6 +23,50 @@ class TrailSegment {
     ),
     color: Color((json['color'] as num?)?.toInt() ?? 0xFF00E676),
   );
+
+  /// Combines consecutive segments into continuous, smooth road polylines
+  static List<Polyline> toSmoothPolylines(List<TrailSegment> segments, {double strokeWidth = 6.0}) {
+    if (segments.isEmpty) return [];
+    List<Polyline> polylines = [];
+    List<LatLng> currentPoints = [];
+    Color? currentColor;
+
+    for (var seg in segments) {
+      final dist = const Distance().as(LengthUnit.Meter, seg.start, seg.end);
+      // Discard stationary micro-jitter (< 2m) and cross-town jumps (> 80m)
+      if (dist < 2.0 || dist > 80.0) continue;
+
+      if (currentColor == null ||
+          seg.color.value != currentColor.value ||
+          (currentPoints.isNotEmpty && const Distance().as(LengthUnit.Meter, currentPoints.last, seg.start) > 20.0)) {
+        if (currentPoints.length >= 2 && currentColor != null) {
+          polylines.add(Polyline(
+            points: List<LatLng>.from(currentPoints),
+            color: currentColor,
+            strokeWidth: strokeWidth,
+            borderColor: Colors.black26,
+            borderStrokeWidth: 1.0,
+          ));
+        }
+        currentPoints = [seg.start, seg.end];
+        currentColor = seg.color;
+      } else {
+        currentPoints.add(seg.end);
+      }
+    }
+
+    if (currentPoints.length >= 2 && currentColor != null) {
+      polylines.add(Polyline(
+        points: List<LatLng>.from(currentPoints),
+        color: currentColor,
+        strokeWidth: strokeWidth,
+        borderColor: Colors.black26,
+        borderStrokeWidth: 1.0,
+      ));
+    }
+
+    return polylines;
+  }
 }
 
 class TripMapScreen extends StatefulWidget {
@@ -45,8 +90,11 @@ class TripMapScreen extends StatefulWidget {
 class _TripMapScreenState extends State<TripMapScreen> {
   final MapController _mapController = MapController();
   List<TrailSegment> _trail = [];
+  List<Polyline> _cachedPolylines = [];
+  List<Marker> _cachedMarkers = [];
   List<Map<String, dynamic>> _trashSpots = [];
   bool _isLoading = true;
+  double _currentZoom = 13.0;
 
   @override
   void initState() {
@@ -84,7 +132,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
         final mv = data['model_version'] ?? data['modelVersion'];
         if (mv == null) continue;
         final s = mv.toString().toLowerCase().trim();
-        if (s != MODEL_VERSION.toString() && s != 'v$MODEL_VERSION') continue;
+        if (s != MODEL_VERSION.toString() && s != 'v$MODEL_VERSION' && !(MODEL_VERSION == 7 && (s.contains('7') || s.contains('mobilenet')))) continue;
 
         // Filter by timestamp range for this specific trip
         if (data['timestamp'] != null) {
@@ -125,6 +173,24 @@ class _TripMapScreenState extends State<TripMapScreen> {
       debugPrint("Error fetching trip data: $e");
     } finally {
       if (mounted) {
+        _cachedPolylines = _trail.isNotEmpty ? TrailSegment.toSmoothPolylines(_trail) : [];
+        _cachedMarkers = _trashSpots.map((spot) {
+          final lat = spot['lat'] as double;
+          final lng = spot['lng'] as double;
+          final isVeryDirty = spot['road_status'] == 'Very Dirty Road' || spot['road_status'] == 'Very_Dirty';
+          
+          return Marker(
+            point: LatLng(lat, lng),
+            width: 38,
+            height: 46,
+            alignment: Alignment.topCenter,
+            child: TrashPinpointWidget(
+              isVeryDirty: isVeryDirty,
+              onTap: () => _showTrashPopup(spot),
+            ),
+          );
+        }).toList();
+
         setState(() {
           _isLoading = false;
         });
@@ -228,41 +294,38 @@ class _TripMapScreenState extends State<TripMapScreen> {
               options: MapOptions(
                 initialCenter: const LatLng(12.9716, 77.5946),
                 initialZoom: 13.0,
+                onPositionChanged: (camera, hasGesture) {
+                  if ((camera.zoom >= 15.0) != (_currentZoom >= 15.0)) {
+                    setState(() {
+                      _currentZoom = camera.zoom;
+                    });
+                  }
+                },
+                onPointerHover: (event, point) => WardZoneService.instance.handleHover(point, zoom: _mapController.camera.zoom),
+                onTap: (tapPosition, point) => WardZoneService.instance.handleHover(point, zoom: _mapController.camera.zoom),
               ),
               children: [
                 TileLayer(
                   urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                   userAgentPackageName: 'com.nitin.trashtracker',
                 ),
-                if (_trail.isNotEmpty)
+                ...WardZoneService.instance.buildLayers(),
+                if (_cachedPolylines.isNotEmpty)
                   PolylineLayer(
-                    polylines: _trail.map((segment) => Polyline(
-                      points: [segment.start, segment.end],
-                      strokeWidth: 8,
-                      color: segment.color,
-                      borderStrokeWidth: 2,
-                      borderColor: Colors.white.withOpacity(0.8),
-                    )).toList(),
+                    polylines: _cachedPolylines,
                   ),
-                if (_trashSpots.isNotEmpty)
-                  MarkerLayer(
-                    markers: _trashSpots.map((spot) {
-                      final lat = spot['lat'] as double;
-                      final lng = spot['lng'] as double;
-                      final isVeryDirty = spot['road_status'] == 'Very Dirty Road' || spot['road_status'] == 'Very_Dirty';
-                      
-                      return Marker(
-                        point: LatLng(lat, lng),
-                        width: 38,
-                        height: 46,
-                        alignment: Alignment.topCenter,
-                        child: TrashPinpointWidget(
-                          isVeryDirty: isVeryDirty,
-                          onTap: () => _showTrashPopup(spot),
-                        ),
-                      );
-                    }).toList(),
-                  ),
+                Builder(
+                  builder: (context) {
+                    final camera = MapCamera.of(context);
+                    final bool showPins = camera.zoom >= 14.8;
+                    if (!showPins || _cachedMarkers.isEmpty) {
+                      return const SizedBox.shrink();
+                    }
+                    return MarkerLayer(
+                      markers: _cachedMarkers,
+                    );
+                  },
+                ),
               ],
             ),
     );

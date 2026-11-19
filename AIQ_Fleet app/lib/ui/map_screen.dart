@@ -7,9 +7,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/telemetry_service.dart';
 import '../services/auth_service.dart';
 import '../services/ai_estimation_service.dart';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
 import '../services/camera_service.dart';
+import '../services/ward_zone_service.dart';
 import '../constants.dart';
 import 'route_assigner_screen.dart';
 import '../widgets/trash_pinpoint_marker.dart';
@@ -39,6 +38,50 @@ class TrailSegment {
     ),
     color: Color((json['color'] as num?)?.toInt() ?? 0xFF00E676),
   );
+
+  /// Combines consecutive segments into continuous, smooth road polylines
+  static List<Polyline> toSmoothPolylines(List<TrailSegment> segments, {double strokeWidth = 6.0}) {
+    if (segments.isEmpty) return [];
+    List<Polyline> polylines = [];
+    List<LatLng> currentPoints = [];
+    Color? currentColor;
+
+    for (var seg in segments) {
+      final dist = const Distance().as(LengthUnit.Meter, seg.start, seg.end);
+      // Discard stationary micro-jitter (< 2m) and cross-town jumps (> 80m)
+      if (dist < 2.0 || dist > 80.0) continue;
+
+      if (currentColor == null ||
+          seg.color.value != currentColor.value ||
+          (currentPoints.isNotEmpty && const Distance().as(LengthUnit.Meter, currentPoints.last, seg.start) > 20.0)) {
+        if (currentPoints.length >= 2 && currentColor != null) {
+          polylines.add(Polyline(
+            points: List<LatLng>.from(currentPoints),
+            color: currentColor,
+            strokeWidth: strokeWidth,
+            borderColor: Colors.black26,
+            borderStrokeWidth: 1.0,
+          ));
+        }
+        currentPoints = [seg.start, seg.end];
+        currentColor = seg.color;
+      } else {
+        currentPoints.add(seg.end);
+      }
+    }
+
+    if (currentPoints.length >= 2 && currentColor != null) {
+      polylines.add(Polyline(
+        points: List<LatLng>.from(currentPoints),
+        color: currentColor,
+        strokeWidth: strokeWidth,
+        borderColor: Colors.black26,
+        borderStrokeWidth: 1.0,
+      ));
+    }
+
+    return polylines;
+  }
 }
 
 class MapScreen extends StatefulWidget {
@@ -105,124 +148,126 @@ class _MapScreenState extends State<MapScreen> {
     final currentPos = telemetry.currentPosition;
     
     if (currentPos != null) {
+      // 1. Accuracy Filter: reject positions with > 18m uncertainty (prevents jumping into buildings)
+      if (currentPos.accuracy > 18.0) return;
+
       final currentLoc = LatLng(currentPos.latitude, currentPos.longitude);
       
       if (_lastRecordedPosition != null) {
         final distance = const Distance().as(LengthUnit.Meter, _lastRecordedPosition!, currentLoc);
         
-        // Ignore tiny jitter when vehicle is stationary or creeping (< 8 meters)
-        if (distance < 8.0) return;
+        // 2. Stationary / Idle Jitter Filter:
+        // When vehicle is stopped/crawling (< 0.6 m/s) and moved < 6m, skip to prevent knots & triangles
+        final isStationary = currentPos.speed < 0.6;
+        if (isStationary && distance < 6.0) return;
+
+        // Ignore tiny jitter
+        if (distance < 3.5) return;
 
         // Protection against GPS jumps/teleports: do not draw straight line across town
-        if (distance > 150.0) {
+        if (distance > 80.0) {
           _lastRecordedPosition = currentLoc;
           return;
         }
 
         final cameraService = context.read<CameraService>();
-        final isCameraOn = cameraService.isCameraOn;
 
-        // Road tracing color rules:
-        // 1. If camera is OFF: Normal blue color (Google Maps Navigation Blue: 0xFF2196F3)
-        // 2. If camera is ON (scanning / auto-capturing):
-        //    - Clean road or No Trash Detected: Vibrant Green (0xFF00E676)
-        //    - Trash detected: Vibrant Orange (0xFFFF9100)
-        //    - Very dirty road: Vibrant Red (0xFFFF1744)
-        Color segmentColor;
-        if (isCameraOn) {
-          final status = cameraService.latestRoadStatus;
-          final sLower = status.toLowerCase().trim();
-          
-          final isNoTrashOrClean = sLower.contains('clean') ||
-                                   sLower.contains('no trash') ||
-                                   sLower.contains('no_trash') ||
-                                   sLower == 'unknown' ||
-                                   sLower.isEmpty;
+        // Road tracing condition color mapping:
+        // - Very dirty road / Pothole detected: Vibrant Red (0xFFFF1744)
+        // - Trash detected / Slightly dirty / Bad road: Vibrant Orange/Amber (0xFFFF9100)
+        // - Clean road / No trash detected: Vibrant Green (0xFF00E676)
+        final gStatus = cameraService.latestRoadStatus.toLowerCase().trim();
+        final hStatus = cameraService.latestHealthStatus.toLowerCase().trim();
+        
+        final isClean = (gStatus.contains('clean') || gStatus.contains('no trash') || gStatus.contains('no_trash') || gStatus == 'unknown' || gStatus.isEmpty) &&
+                        (hStatus.contains('good') || hStatus == 'unknown' || hStatus.isEmpty);
 
-          if (status == 'Very Dirty Road' || status == 'Very_Dirty' || sLower.contains('very dirty') || sLower.contains('very_dirty')) {
-            segmentColor = const Color(0xFFFF1744); // Red for Very Dirty Road
-          } else if (!isNoTrashOrClean && (status == 'Trash Detected' || status == 'Slightly Dirty Road' || status == 'Trash_Detected' || sLower.contains('trash') || sLower.contains('dirty'))) {
-            segmentColor = const Color(0xFFFF9100); // Orange for Trash Detected
-          } else {
-            // Clean road or No Trash Detected: Vibrant Green
-            segmentColor = const Color(0xFF00E676);
-          }
-        } else {
-          // Camera off: Standard Navigation Blue
-          segmentColor = const Color(0xFF2196F3);
+        Color segmentColor = const Color(0xFF00E676); // Clean Green
+        if (gStatus.contains('very dirty') || gStatus.contains('very_dirty') || hStatus.contains('pothole')) {
+          segmentColor = const Color(0xFFFF1744); // Critical Red
+        } else if (!isClean && (gStatus.contains('trash') || gStatus.contains('dirty') || hStatus.contains('bad road') || hStatus.contains('bad_road'))) {
+          segmentColor = const Color(0xFFFF9100); // Warning Amber/Orange
         }
 
         final start = _lastRecordedPosition!;
         final end = currentLoc;
         _lastRecordedPosition = currentLoc;
 
-        _fetchSnappedRoute(start, end, segmentColor);
+        _recordTrailSegment(start, end, segmentColor);
       } else {
         _lastRecordedPosition = currentLoc;
       }
     }
   }
 
-  Future<void> _fetchSnappedRoute(LatLng start, LatLng end, Color color) async {
-    try {
-      final url = 'https://router.project-osrm.org/route/v1/driving/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=geojson';
-      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 3));
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        if (data['routes'] != null && data['routes'].isNotEmpty) {
-          final coords = data['routes'][0]['geometry']['coordinates'] as List;
-          final List<LatLng> snappedPoints = coords.map((c) => LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble())).toList();
-          
-          if (mounted) {
-            List<TrailSegment> newSegments = [];
-            for (int i = 0; i < snappedPoints.length - 1; i++) {
-              newSegments.add(TrailSegment(
-                start: snappedPoints[i],
-                end: snappedPoints[i + 1],
-                color: color
-              ));
-            }
-            setState(() {
-              _navigationTrail.addAll(newSegments);
-            });
-            
-            // Save to Firestore
-            final authService = context.read<AuthService>();
-            final vehicleNo = authService.vehicleNumber;
-            if (vehicleNo != null) {
-              FirebaseFirestore.instance.collection('vehicles').doc(vehicleNo)
-                .collection('daily_stats').doc(_todayDateString)
-                .set({
-                  'trail': FieldValue.arrayUnion(newSegments.map((s) => s.toJson()).toList())
-                }, SetOptions(merge: true)).catchError((_) {});
-            }
-          }
-          return;
-        }
-      }
-    } catch (e) {
-      debugPrint("OSRM error: $e");
+  void _recordTrailSegment(LatLng start, LatLng end, Color color) {
+    if (!mounted) return;
+    final seg = TrailSegment(start: start, end: end, color: color);
+    setState(() {
+      _navigationTrail.add(seg);
+    });
+
+    final authService = context.read<AuthService>();
+    final vehicleNo = authService.vehicleNumber;
+    if (vehicleNo != null && vehicleNo.isNotEmpty) {
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      FirebaseFirestore.instance.collection('vehicles').doc(vehicleNo)
+        .collection('daily_stats').doc(_todayDateString)
+        .set({
+          'trail': FieldValue.arrayUnion([seg.toJson()]),
+          'route': FieldValue.arrayUnion([{
+            'lat': end.latitude,
+            'lng': end.longitude,
+            'timestamp': nowMs,
+            'color': color.value,
+          }]),
+          'last_updated': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true)).catchError((_) {});
+
+      final cameraService = context.read<CameraService>();
+      FirebaseFirestore.instance.collection('live_tracking').doc(vehicleNo).set({
+        'lat': end.latitude,
+        'lng': end.longitude,
+        'lastColor': color.value,
+        'lastStatus': cameraService.latestRoadStatus,
+        'isActive': true,
+        'timestamp': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true)).catchError((_) {});
     }
-    
-    // Fallback: only connect as a short straight segment if close (<= 25 meters)
-    // Never draw long straight lines cutting across houses or blocks
-    final distance = const Distance().as(LengthUnit.Meter, start, end);
-    if (mounted && distance <= 25.0) {
-      final seg = TrailSegment(start: start, end: end, color: color);
-      setState(() {
-        _navigationTrail.add(seg);
-      });
-      final authService = context.read<AuthService>();
-      final vehicleNo = authService.vehicleNumber;
-      if (vehicleNo != null) {
-        FirebaseFirestore.instance.collection('vehicles').doc(vehicleNo)
+  }
+
+  Future<void> _clearTodayTrail() async {
+    setState(() {
+      _navigationTrail.clear();
+      _lastRecordedPosition = null;
+    });
+    final authService = context.read<AuthService>();
+    final vehicleNo = authService.vehicleNumber;
+    if (vehicleNo != null && vehicleNo.isNotEmpty) {
+      try {
+        await FirebaseFirestore.instance.collection('vehicles').doc(vehicleNo)
           .collection('daily_stats').doc(_todayDateString)
           .set({
-            'trail': FieldValue.arrayUnion([seg.toJson()])
-          }, SetOptions(merge: true)).catchError((_) {});
+            'trail': [],
+            'route': [],
+            'distance_km': 0.0,
+            'last_updated': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("Today's vehicle trail and route reset successfully!"),
+              backgroundColor: Color(0xFF10B981),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      } catch (e) {
+        debugPrint("Error resetting trail: $e");
       }
     }
   }
+
 
   void _startRouteSync() {
     final authService = context.read<AuthService>();
@@ -285,7 +330,7 @@ class _MapScreenState extends State<MapScreen> {
             final mv = spot['model_version'] ?? spot['modelVersion'];
             if (mv == null) return false;
             final s = mv.toString().toLowerCase().trim();
-            final matchesModel = (mv == MODEL_VERSION || s == MODEL_VERSION.toString() || s == 'v$MODEL_VERSION');
+            final matchesModel = (mv == MODEL_VERSION || s == MODEL_VERSION.toString() || s == 'v$MODEL_VERSION' || (MODEL_VERSION == 7 && (s.contains('7') || s.contains('mobilenet'))));
             if (!matchesModel) return false;
 
             // Only flag actual trash detections
@@ -552,6 +597,30 @@ class _MapScreenState extends State<MapScreen> {
     }).toList();
   }
 
+  List<Marker> _cachedFleetTrashMarkers = [];
+  int _lastFleetTrashCount = -1;
+
+  List<Marker> _getCachedUniformTrashMarkers(List<Map<String, dynamic>> spots) {
+    if (_cachedFleetTrashMarkers.isNotEmpty && spots.length == _lastFleetTrashCount) {
+      return _cachedFleetTrashMarkers;
+    }
+    _lastFleetTrashCount = spots.length;
+    _cachedFleetTrashMarkers = _buildUniformTrashMarkers(spots);
+    return _cachedFleetTrashMarkers;
+  }
+
+  List<Polyline> _cachedTrailPolylines = [];
+  int _lastTrailLength = -1;
+
+  List<Polyline> _getCachedTrailPolylines() {
+    if (_cachedTrailPolylines.isNotEmpty && _navigationTrail.length == _lastTrailLength) {
+      return _cachedTrailPolylines;
+    }
+    _lastTrailLength = _navigationTrail.length;
+    _cachedTrailPolylines = TrailSegment.toSmoothPolylines(_navigationTrail);
+    return _cachedTrailPolylines;
+  }
+
   void _showAnalyticsPopup() {
     final telemetry = context.read<TelemetryService>();
     final camera = context.read<CameraService>();
@@ -656,11 +725,13 @@ class _MapScreenState extends State<MapScreen> {
             options: MapOptions(
               initialCenter: initialCenter,
               initialZoom: 15.0,
+              onPointerHover: (event, point) => WardZoneService.instance.handleHover(point, zoom: _mapController.camera.zoom),
+              onTap: (tapPosition, point) => WardZoneService.instance.handleHover(point, zoom: _mapController.camera.zoom),
               onPositionChanged: (position, hasGesture) {
                 if (hasGesture && _isFollowingUser) {
                   setState(() => _isFollowingUser = false);
                 }
-                final isZoomedIn = position.zoom >= 16.5;
+                final isZoomedIn = position.zoom >= 15.0;
                 if (_isZoomedInForFlags != isZoomedIn) {
                   setState(() => _isZoomedInForFlags = isZoomedIn);
                 }
@@ -671,6 +742,7 @@ class _MapScreenState extends State<MapScreen> {
                 urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.nitin.trashtracker',
               ),
+              ...WardZoneService.instance.buildLayers(),
               
               if (_assignedRoute.isNotEmpty)
                 PolylineLayer(
@@ -687,13 +759,7 @@ class _MapScreenState extends State<MapScreen> {
                 
               if (_navigationTrail.isNotEmpty)
                 PolylineLayer(
-                  polylines: _navigationTrail.map((segment) => Polyline(
-                    points: [segment.start, segment.end],
-                    strokeWidth: 8,
-                    color: segment.color,
-                    borderStrokeWidth: 2,
-                    borderColor: Colors.white.withOpacity(0.8),
-                  )).toList(),
+                  polylines: _getCachedTrailPolylines(),
                 ),
 
               if (_assignedCheckpoints.isNotEmpty)
@@ -734,10 +800,18 @@ class _MapScreenState extends State<MapScreen> {
                   }).toList(),
                 ),
                 
-              if (_trashSpots.isNotEmpty && _showFlags)
-                MarkerLayer(
-                  markers: _buildUniformTrashMarkers(_trashSpots),
-                ),
+              Builder(
+                builder: (context) {
+                  final camera = MapCamera.of(context);
+                  final bool showPins = _showFlags && (camera.zoom >= 14.8);
+                  if (!showPins || _trashSpots.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
+                  return MarkerLayer(
+                    markers: _getCachedUniformTrashMarkers(_trashSpots),
+                  );
+                },
+              ),
 
               if (currentPos != null)
                 MarkerLayer(
@@ -943,17 +1017,34 @@ class _MapScreenState extends State<MapScreen> {
             bottom: 140, // Ensure it sits well above the floating dock on small screens
             right: 24,
             left: 24, // Stretch or center it better on small screens
-            child: FloatingActionButton.extended(
-              onPressed: () => _toggleNavigation(
-                currentPos != null ? LatLng(currentPos.latitude, currentPos.longitude) : null,
-                heading,
-              ),
-              backgroundColor: _isNavigating ? Colors.redAccent : Colors.blueAccent,
-              icon: Icon(_isNavigating ? Icons.stop_rounded : Icons.play_arrow_rounded, color: Colors.white),
-              label: Text(
-                _isNavigating ? 'Stop Navigation' : 'Start Navigation', 
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)
-              ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: FloatingActionButton.extended(
+                    heroTag: 'navToggleBtn',
+                    onPressed: () => _toggleNavigation(
+                      currentPos != null ? LatLng(currentPos.latitude, currentPos.longitude) : null,
+                      heading,
+                    ),
+                    backgroundColor: _isNavigating ? Colors.redAccent : Colors.blueAccent,
+                    icon: Icon(_isNavigating ? Icons.stop_rounded : Icons.play_arrow_rounded, color: Colors.white),
+                    label: Text(
+                      _isNavigating ? 'Stop Navigation' : 'Start Navigation', 
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)
+                    ),
+                  ),
+                ),
+                if (_navigationTrail.isNotEmpty) ...[
+                  const SizedBox(width: 10),
+                  FloatingActionButton(
+                    heroTag: 'clearTrailBtn',
+                    onPressed: _clearTodayTrail,
+                    backgroundColor: const Color(0xFF1E293B),
+                    tooltip: "Reset Today's Route",
+                    child: const Icon(Icons.refresh_rounded, color: Colors.white),
+                  ),
+                ],
+              ],
             ),
           ),
           

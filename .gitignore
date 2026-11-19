@@ -84,9 +84,17 @@ build/
 .flutter-plugins-dependencies
 *.log
 
-# Windows / IDE
-.vscode/
-.idea/
+# IDE / Local Temporary Folders
+New folder/
+trash tracker/
+scratch/
+flags_seeded_summary.json
+trash_image_filenames.json
+seeded_credentials.json
+history.json
+*.bat
+*.ps1
+
 *.suo
 *.ntvs*
 *.njsproj

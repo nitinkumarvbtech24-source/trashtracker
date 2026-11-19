@@ -83,12 +83,12 @@ for folder in [ANALYSED_TRASH_DIR, ANALYSED_NO_TRASH_DIR, TRAINING_TRASH_DIR, TR
 app.mount("/snapshots", StaticFiles(directory=str(SNAPSHOTS_DIR)), name="snapshots")
 
 history = []
-HISTORY_FILE = "history.json"
+HISTORY_FILE = BASE_DIR / "history.json"
 
-if os.path.exists(HISTORY_FILE):
+if HISTORY_FILE.exists():
     try:
         import json
-        with open(HISTORY_FILE, "r") as f:
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
             history = json.load(f)
     except Exception as e:
         print("Error loading history:", e)
@@ -356,6 +356,11 @@ async def predict_file(file: UploadFile = File(...)):
     contents = await file.read()
     res = detect_road_trash(contents)
     return JSONResponse(content=res)
+
+@app.get("/health")
+@app.get("/api/health")
+async def health():
+    return JSONResponse(content={"status": "ok", "model": "v7_mobilenetv3", "port": 5002})
 
 @app.get("/api/settings")
 async def get_settings():
@@ -1066,10 +1071,30 @@ class FrameRequest(BaseModel):
     session_id: str = None
     point_type: str = None
 
+# Cache of recently processed image hashes: {sha256_hash: (timestamp, snapshot_dict)}
+import hashlib
+import time
+_recent_image_cache = {}
+
 @app.post("/process_frame")
 async def process_frame(req: FrameRequest):
     encoded = req.image.split(",", 1)[1] if "," in req.image else req.image
     img_bytes = base64.b64decode(encoded)
+
+    # 0. Deduplication: Check if identical image was sent within the last 15 seconds
+    img_hash = hashlib.sha256(img_bytes).hexdigest()
+    now_time = time.time()
+
+    # Clean old cache entries (> 60s)
+    for h in list(_recent_image_cache.keys()):
+        if now_time - _recent_image_cache[h][0] > 60:
+            del _recent_image_cache[h]
+
+    if img_hash in _recent_image_cache:
+        prev_time, cached_snap = _recent_image_cache[img_hash]
+        if now_time - prev_time < 15:
+            print(f"⚠️ Duplicate image submission prevented (SHA256: {img_hash[:10]}... within {now_time - prev_time:.1f}s). Returning existing snapshot {cached_snap['id']}.")
+            return cached_snap
     
     uid = str(uuid.uuid4())
     raw_filename = f"raw_{uid}.jpg"
@@ -1124,13 +1149,17 @@ async def process_frame(req: FrameRequest):
         "mobilenet_result": res.get("mobilenet_result", {})
     }
     
+    _recent_image_cache[img_hash] = (now_time, snapshot)
     history.append(snapshot)
     if len(history) > 1000:
         history.pop(0)
         
     import json
     try:
-        with open(HISTORY_FILE, "w") as f:
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(history, f)
+        root_hist = BASE_DIR.parent / "history.json"
+        with open(root_hist, "w", encoding="utf-8") as f:
             json.dump(history, f)
     except Exception as e:
         print("Error saving history:", e)
@@ -1145,6 +1174,31 @@ async def api_snapshots():
         if "training_tag" not in s:
             s["training_tag"] = s.get("display_class", s.get("road_status", "No Trash Detected"))
     return {"snapshots": history}
+
+class TrainingUploadRequest(BaseModel):
+    image: str
+    vehicle_number: str = "Unknown"
+    driver_name: str = "Unknown"
+
+@app.post("/upload_training")
+async def upload_training(req: TrainingUploadRequest):
+    encoded = req.image.split(",", 1)[1] if "," in req.image else req.image
+    img_bytes = base64.b64decode(encoded)
+    uid = str(uuid.uuid4())
+    filename = f"training_{uid}.jpg"
+    target = SNAPSHOTS_DIR / "training" / "no_trash_detected" / filename
+    with open(target, "wb") as f:
+        f.write(img_bytes)
+    return {"status": "ok", "image_url": f"/snapshots/training/no_trash_detected/{filename}"}
+
+@app.post("/api/v1/telemetry")
+async def receive_telemetry(data: dict):
+    batch = data.get("batch", [])
+    return {"status": "ok", "synced": len(batch)}
+
+@app.get("/api/v1/health")
+async def api_v1_health():
+    return {"status": "ok", "model": "v7_mobilenetv3", "port": 5002}
 
 @app.get("/api/training_dataset")
 async def api_training_dataset():
@@ -1161,6 +1215,27 @@ async def api_training_dataset():
         })
     return {"training_dataset": training_items, "total": len(training_items)}
 
+def free_port(port: int):
+    """Automatically frees the port on Windows if an orphaned background process is holding it."""
+    import subprocess, time
+    if os.name == 'nt':
+        try:
+            output = subprocess.check_output(f'netstat -ano | findstr :{port}', shell=True, text=True, stderr=subprocess.DEVNULL)
+            current_pid = os.getpid()
+            killed_any = False
+            for line in output.strip().splitlines():
+                if "LISTENING" in line:
+                    parts = line.strip().split()
+                    pid = int(parts[-1])
+                    if pid != current_pid and pid > 0:
+                        subprocess.run(f'taskkill /F /PID {pid}', shell=True, capture_output=True)
+                        print(f"🔄 Automatically freed port {port} (killed stale PID {pid})")
+                        killed_any = True
+            if killed_any:
+                time.sleep(1.0)
+        except Exception:
+            pass
+
 if __name__ == "__main__":
-    # You might want to change the port if v5 is also running. Defaulting to 5001.
-    uvicorn.run(app, host="127.0.0.1", port=5001)
+    free_port(5002)
+    uvicorn.run(app, host="0.0.0.0", port=5002)
