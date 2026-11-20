@@ -26,6 +26,7 @@ import 'alerts_screen.dart';
 import '../models/garbage_flag.dart';
 import '../widgets/trash_pinpoint_marker.dart';
 import '../widgets/trash_flag_inspection_modal.dart';
+import '../widgets/placeholder_map_switch.dart';
 import '../services/ward_zone_service.dart';
 import '../services/trash_spots_service.dart';
 import '../services/role_service.dart';
@@ -80,7 +81,7 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
   String _cachedMarkerFilterKey = '';
 
   List<Marker> _getOrCreateTrashMarkers(List<GarbageFlag> flags) {
-    final filterKey = '${flags.length}_${_selectedZone}_${_selectedWard}';
+    final filterKey = '${flags.length}_${_selectedZone}_${_selectedWard}_${TrashSpotsService.instance.showPlaceholders}';
     if (_cachedTrashCount == flags.length && _cachedMarkerFilterKey == filterKey && _cachedTrashMarkers.isNotEmpty) {
       return _cachedTrashMarkers;
     }
@@ -1466,6 +1467,13 @@ class _CleanlinessScreenState extends State<CleanlinessScreen> {
               }).toList(),
             ),
             
+            // Map Placeholder / Real Flags Toggle Switch
+            Positioned(
+              top: 16,
+              right: 16,
+              child: const PlaceholderMapSwitch(isDark: true),
+            ),
+
             // Add map controls
             Align(
               alignment: Alignment.bottomRight,

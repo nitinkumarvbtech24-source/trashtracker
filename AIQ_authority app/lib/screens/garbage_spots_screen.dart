@@ -16,9 +16,10 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../constants.dart';
 import '../widgets/trash_pinpoint_marker.dart';
+import '../widgets/trash_flag_inspection_modal.dart';
+import '../widgets/placeholder_map_switch.dart';
 import '../services/ward_zone_service.dart';
 import '../services/trash_spots_service.dart';
-import '../widgets/trash_flag_inspection_modal.dart';
 import '../services/authority_directory_service.dart';
 
 class GarbageSpotsScreen extends StatefulWidget {
@@ -530,6 +531,12 @@ class _GarbageSpotsScreenState extends State<GarbageSpotsScreen> {
                 },
               ),
             ],
+          ),
+          // Placeholder vs Real Flags Switch
+          Positioned(
+            top: 16,
+            right: 16,
+            child: const PlaceholderMapSwitch(isDark: false),
           ),
           Positioned(
             bottom: 24,

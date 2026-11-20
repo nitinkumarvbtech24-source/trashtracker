@@ -21,6 +21,7 @@ import '../services/ward_zone_service.dart';
 import '../services/trash_spots_service.dart';
 import '../widgets/trash_pinpoint_marker.dart';
 import '../widgets/trash_flag_inspection_modal.dart';
+import '../widgets/placeholder_map_switch.dart';
 
 class ActiveFleetScreen extends StatefulWidget {
   const ActiveFleetScreen({super.key});
@@ -751,80 +752,89 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
   }
 
   Widget _buildMap(List<Vehicle> filteredVehicles) {
-    return FlutterMap(
-      mapController: _mapController,
-      options: const MapOptions(
-        initialCenter: LatLng(12.9716, 77.5946),
-        initialZoom: 11.8,
-      ),
+    return Stack(
       children: [
-        TileLayer(
-          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-          userAgentPackageName: 'com.nitin.trashtracker',
-          tileProvider: kIsWeb ? null : CachedTileProvider(store: MapCacheService.store),
-        ),
-        ...WardZoneService.instance.buildLayers(
-          selectedZone: _selectedZoneFilter,
-          selectedWard: _selectedWard?.name ?? _selectedWardFilter,
-        ),
-        MarkerLayer(
-          markers: filteredVehicles.where((v) => v.currentLocation != null).map((vehicle) {
-              final statusColor = Color(vehicle.stateColorValue);
-              return Marker(
-                point: vehicle.currentLocation!, width: 100, height: 100,
-                child: GestureDetector(
-                  onTap: () {
-                    setState(() {
-                      _selectedVehicle = vehicle;
-                      _selectedWard = _wards.where((w) => w.name == vehicle.assignedWard).firstOrNull;
-                    });
-                    if (vehicle.currentLocation != null) _mapController.move(vehicle.currentLocation!, 16.0);
-                  },
-                  onDoubleTap: () => _navigateToDetails(vehicle),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: statusColor, 
-                          borderRadius: BorderRadius.circular(4),
-                          boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2))],
-                        ),
-                        child: Text(vehicle.vehicleNumber, style: GoogleFonts.inter(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+        FlutterMap(
+          mapController: _mapController,
+          options: const MapOptions(
+            initialCenter: LatLng(12.9716, 77.5946),
+            initialZoom: 11.8,
+          ),
+          children: [
+            TileLayer(
+              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+              userAgentPackageName: 'com.nitin.trashtracker',
+              tileProvider: kIsWeb ? null : CachedTileProvider(store: MapCacheService.store),
+            ),
+            ...WardZoneService.instance.buildLayers(
+              selectedZone: _selectedZoneFilter,
+              selectedWard: _selectedWard?.name ?? _selectedWardFilter,
+            ),
+            MarkerLayer(
+              markers: filteredVehicles.where((v) => v.currentLocation != null).map((vehicle) {
+                  final statusColor = Color(vehicle.stateColorValue);
+                  return Marker(
+                    point: vehicle.currentLocation!, width: 100, height: 100,
+                    child: GestureDetector(
+                      onTap: () {
+                        setState(() {
+                          _selectedVehicle = vehicle;
+                          _selectedWard = _wards.where((w) => w.name == vehicle.assignedWard).firstOrNull;
+                        });
+                        if (vehicle.currentLocation != null) _mapController.move(vehicle.currentLocation!, 16.0);
+                      },
+                      onDoubleTap: () => _navigateToDetails(vehicle),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: statusColor, 
+                              borderRadius: BorderRadius.circular(4),
+                              boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2))],
+                            ),
+                            child: Text(vehicle.vehicleNumber, style: GoogleFonts.inter(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                          ),
+                          const SizedBox(height: 2),
+                          Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: statusColor,
+                              shape: BoxShape.circle, 
+                              border: Border.all(color: Colors.white, width: 2),
+                              boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2))]
+                            ),
+                            child: const Icon(LucideIcons.truck, color: Colors.white, size: 14),
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 2),
-                      Container(
-                        padding: const EdgeInsets.all(6),
-                        decoration: BoxDecoration(
-                          color: statusColor,
-                          shape: BoxShape.circle, 
-                          border: Border.all(color: Colors.white, width: 2),
-                          boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2))]
-                        ),
-                        child: const Icon(LucideIcons.truck, color: Colors.white, size: 14),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }).toList(),
+                    ),
+                  );
+                }).toList(),
+            ),
+            Builder(
+              builder: (context) {
+                final camera = MapCamera.of(context);
+                final hasSpecificWard = (_selectedWard?.name ?? _selectedWardFilter) != 'All Wards' &&
+                    (_selectedWard?.name ?? _selectedWardFilter).isNotEmpty;
+                final bool showPins = hasSpecificWard
+                    ? (camera.zoom >= 14.8)
+                    : (camera.zoom >= WardZoneService.individualWardPinsZoomThreshold);
+                if (!showPins) {
+                  return const SizedBox.shrink();
+                }
+                return MarkerLayer(
+                  markers: _buildTrashMarkers(),
+                );
+              },
+            ),
+          ],
         ),
-        Builder(
-          builder: (context) {
-            final camera = MapCamera.of(context);
-            final hasSpecificWard = (_selectedWard?.name ?? _selectedWardFilter) != 'All Wards' &&
-                (_selectedWard?.name ?? _selectedWardFilter).isNotEmpty;
-            final bool showPins = hasSpecificWard
-                ? (camera.zoom >= 14.8)
-                : (camera.zoom >= WardZoneService.individualWardPinsZoomThreshold);
-            if (!showPins) {
-              return const SizedBox.shrink();
-            }
-            return MarkerLayer(
-              markers: _buildTrashMarkers(),
-            );
-          },
+        Positioned(
+          top: 14,
+          right: 14,
+          child: const PlaceholderMapSwitch(isDark: false),
         ),
       ],
     );

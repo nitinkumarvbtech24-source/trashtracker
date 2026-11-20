@@ -18,6 +18,8 @@ import '../services/map_cache_service.dart';
 import '../services/role_service.dart';
 import '../services/trash_spots_service.dart';
 import '../widgets/trash_pinpoint_marker.dart';
+import '../widgets/trash_flag_inspection_modal.dart';
+import '../widgets/placeholder_map_switch.dart';
 import '../services/ward_zone_service.dart';
 import '../models/trail_segment.dart';
 import '../widgets/trash_flag_inspection_modal.dart';
@@ -1064,6 +1066,8 @@ class _FleetScreenState extends State<FleetScreen> {
                       decoration: BoxDecoration(border: Border.all(color: const Color(0xFFE5E7EB)), borderRadius: BorderRadius.circular(6)),
                       child: const Icon(LucideIcons.maximize, size: 16, color: Color(0xFF6B7280)),
                     ),
+                    const SizedBox(width: 12),
+                    const PlaceholderMapSwitch(isDark: false, compact: true),
                   ],
                 )
               ],

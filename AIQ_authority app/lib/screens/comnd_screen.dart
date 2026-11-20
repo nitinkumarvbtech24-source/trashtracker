@@ -10,6 +10,8 @@ import '../widgets/ngrok_image.dart';
 import 'comnd_deflag_screen.dart';
 import '../constants.dart';
 import '../widgets/trash_pinpoint_marker.dart';
+import '../widgets/trash_flag_inspection_modal.dart';
+import '../widgets/placeholder_map_switch.dart';
 import '../services/ward_zone_service.dart';
 import '../services/trash_spots_service.dart';
 import '../models/garbage_flag.dart';
@@ -56,6 +58,7 @@ class _ComndScreenState extends State<ComndScreen> {
     WardZoneService.instance.notifier.addListener(_onWardZoneUpdate);
     TrashSpotsService.instance.init();
     TrashSpotsService.instance.flagsNotifier.addListener(_onWardZoneUpdate);
+    TrashSpotsService.instance.showPlaceholdersNotifier.addListener(_onWardZoneUpdate);
     _fetchZonesAndWards();
     _startLiveTrackingListener();
   }
@@ -71,6 +74,7 @@ class _ComndScreenState extends State<ComndScreen> {
   void dispose() {
     WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
     TrashSpotsService.instance.flagsNotifier.removeListener(_onWardZoneUpdate);
+    TrashSpotsService.instance.showPlaceholdersNotifier.removeListener(_onWardZoneUpdate);
     _liveTrackingSub?.cancel();
     for (var sub in _vehicleTrailSubs.values) {
       sub.cancel();
@@ -482,6 +486,12 @@ class _ComndScreenState extends State<ComndScreen> {
           final lat = ((data['lat'] ?? 0.0) as num).toDouble();
           final lng = ((data['lng'] ?? 0.0) as num).toDouble();
 
+          // Placeholder filter
+          final isPh = data['is_placeholder'] == true || doc.id.toLowerCase().startsWith('flag_') || doc.id.toLowerCase().startsWith('seed_');
+          if (!TrashSpotsService.instance.showPlaceholders && isPh) {
+            continue;
+          }
+
           if (!RoleService.isSpotAllowed(lat, lng, docZone, docWard, 'COM&D')) {
             continue;
           }
@@ -492,6 +502,7 @@ class _ComndScreenState extends State<ComndScreen> {
         // Merge backend trash detected flags
         for (var f in TrashSpotsService.instance.allFlags) {
           if (!f.isTrashReport) continue;
+          if (!TrashSpotsService.instance.showPlaceholders && f.isPlaceholder) continue;
           if (!flagsMap.containsKey(f.id)) {
             if (!RoleService.isSpotAllowed(f.lat, f.lng, f.zone, f.ward, 'COM&D')) {
               continue;
@@ -1196,118 +1207,128 @@ class _ComndScreenState extends State<ComndScreen> {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
-        child: FlutterMap(
-          mapController: _vehicleMapController,
-          options: const MapOptions(
-            initialCenter: LatLng(12.9716, 77.5946),
-            initialZoom: 11.8,
-          ),
+        child: Stack(
           children: [
-            TileLayer(
-              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'com.nitin.trashtracker',
-            ),
-            ...WardZoneService.instance.buildLayers(
-              selectedZone: _vehicleSelectedZone,
-              selectedWard: _vehicleSelectedWard,
-            ),
-            if (routePolylines.isNotEmpty)
-              PolylineLayer(polylines: routePolylines),
-            Builder(
-              builder: (context) {
-                final camera = MapCamera.of(context);
-                final hasSpecificWard = _vehicleSelectedWard != 'All Wards' && _vehicleSelectedWard.isNotEmpty;
-                final bool showPins = hasSpecificWard
-                    ? (camera.zoom >= 14.8)
-                    : (camera.zoom >= WardZoneService.individualWardPinsZoomThreshold);
-                if (!showPins || clusters.isEmpty) {
-                  return const SizedBox.shrink();
-                }
-                return MarkerLayer(
-                  markers: clusters.map<Marker>((cluster) {
-                    final f = cluster.first;
-                    final lat = ((f['lat'] ?? 0.0) as num).toDouble();
-                    final lng = ((f['lng'] ?? 0.0) as num).toDouble();
-                    final status = f['status'] ?? 'Flagged';
-                    final isDeflagged = status == 'Deflagged';
-
-                    return Marker(
-                      point: LatLng(lat, lng),
-                      width: isDeflagged ? 36 : 38,
-                      height: isDeflagged ? 36 : 46,
-                      alignment: isDeflagged ? Alignment.center : Alignment.topCenter,
-                      child: isDeflagged
-                          ? GestureDetector(
-                              onTap: () => _showMarkerDetailsModal(context, f),
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF10B981),
-                                  shape: BoxShape.circle,
-                                  border: Border.all(color: Colors.white, width: 2),
-                                  boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2))],
-                                ),
-                                child: const Center(
-                                  child: Icon(LucideIcons.check, color: Colors.white, size: 18),
-                                ),
-                              ),
-                            )
-                          : TrashPinpointWidget(
-                              count: cluster.length,
-                              isVeryDirty: cluster.any((item) => item['road_status'] == 'Very Dirty Road' || item['road_status'] == 'Very_Dirty'),
-                              onTap: () => _showMarkerDetailsModal(context, f),
-                            ),
-                    );
-                  }).toList(),
-                );
-              },
-            ),
-            // Live fleet vehicle markers on Command Screen
-            if (_liveVehicles.isNotEmpty)
-              MarkerLayer(
-                markers: _liveVehicles.entries.map((entry) {
-                  final data = entry.value;
-                  final lat = (data['lat'] as num).toDouble();
-                  final lng = (data['lng'] as num).toDouble();
-                  final isActive = data['isActive'] as bool? ?? false;
-                  return Marker(
-                    point: LatLng(lat, lng),
-                    width: 90,
-                    height: 55,
-                    alignment: Alignment.center,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1E293B),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: isActive ? const Color(0xFF10B981) : const Color(0xFF3B82F6), width: 1.5),
-                            boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
-                          ),
-                          child: Text(
-                            entry.key,
-                            style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Container(
-                          padding: const EdgeInsets.all(4),
-                          decoration: BoxDecoration(
-                            color: isActive ? const Color(0xFF10B981) : const Color(0xFF3B82F6),
-                            shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white, width: 1.5),
-                            boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 4)],
-                          ),
-                          child: const Icon(LucideIcons.truck, color: Colors.white, size: 12),
-                        ),
-                      ],
-                    ),
-                  );
-                }).toList(),
+            FlutterMap(
+              mapController: _vehicleMapController,
+              options: const MapOptions(
+                initialCenter: LatLng(12.9716, 77.5946),
+                initialZoom: 11.8,
               ),
+              children: [
+                TileLayer(
+                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  userAgentPackageName: 'com.nitin.trashtracker',
+                ),
+                ...WardZoneService.instance.buildLayers(
+                  selectedZone: _vehicleSelectedZone,
+                  selectedWard: _vehicleSelectedWard,
+                ),
+                if (routePolylines.isNotEmpty)
+                  PolylineLayer(polylines: routePolylines),
+                Builder(
+                  builder: (context) {
+                    final camera = MapCamera.of(context);
+                    final hasSpecificWard = _vehicleSelectedWard != 'All Wards' && _vehicleSelectedWard.isNotEmpty;
+                    final bool showPins = hasSpecificWard
+                        ? (camera.zoom >= 14.8)
+                        : (camera.zoom >= WardZoneService.individualWardPinsZoomThreshold);
+                    if (!showPins || clusters.isEmpty) {
+                      return const SizedBox.shrink();
+                    }
+                    return MarkerLayer(
+                      markers: clusters.map<Marker>((cluster) {
+                        final f = cluster.first;
+                        final lat = ((f['lat'] ?? 0.0) as num).toDouble();
+                        final lng = ((f['lng'] ?? 0.0) as num).toDouble();
+                        final status = f['status'] ?? 'Flagged';
+                        final isDeflagged = status == 'Deflagged';
+
+                        return Marker(
+                          point: LatLng(lat, lng),
+                          width: isDeflagged ? 36 : 38,
+                          height: isDeflagged ? 36 : 46,
+                          alignment: isDeflagged ? Alignment.center : Alignment.topCenter,
+                          child: isDeflagged
+                              ? GestureDetector(
+                                  onTap: () => _showMarkerDetailsModal(context, f),
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF10B981),
+                                      shape: BoxShape.circle,
+                                      border: Border.all(color: Colors.white, width: 2),
+                                      boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2))],
+                                    ),
+                                    child: const Center(
+                                      child: Icon(LucideIcons.check, color: Colors.white, size: 18),
+                                    ),
+                                  ),
+                                )
+                              : TrashPinpointWidget(
+                                  count: cluster.length,
+                                  isVeryDirty: cluster.any((item) => item['road_status'] == 'Very Dirty Road' || item['road_status'] == 'Very_Dirty'),
+                                  onTap: () => _showMarkerDetailsModal(context, f),
+                                ),
+                        );
+                      }).toList(),
+                    );
+                  },
+                ),
+                // Live fleet vehicle markers on Command Screen
+                if (_liveVehicles.isNotEmpty)
+                  MarkerLayer(
+                    markers: _liveVehicles.entries.map((entry) {
+                      final data = entry.value;
+                      final lat = (data['lat'] as num).toDouble();
+                      final lng = (data['lng'] as num).toDouble();
+                      final isActive = data['isActive'] as bool? ?? false;
+                      return Marker(
+                        point: LatLng(lat, lng),
+                        width: 90,
+                        height: 55,
+                        alignment: Alignment.center,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF1E293B),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(color: isActive ? const Color(0xFF10B981) : const Color(0xFF3B82F6), width: 1.5),
+                                boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
+                              ),
+                              child: Text(
+                                entry.key,
+                                style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Container(
+                              padding: const EdgeInsets.all(4),
+                              decoration: BoxDecoration(
+                                color: isActive ? const Color(0xFF10B981) : const Color(0xFF3B82F6),
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.white, width: 1.5),
+                                boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 4)],
+                              ),
+                              child: const Icon(LucideIcons.truck, color: Colors.white, size: 12),
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                  ),
+              ],
+            ),
+            // Floating Placeholder vs Real Flags Switch
+            Positioned(
+              top: 14,
+              right: 14,
+              child: const PlaceholderMapSwitch(isDark: false),
+            ),
           ],
         ),
       ),

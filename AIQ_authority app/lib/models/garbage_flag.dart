@@ -19,6 +19,7 @@ class GarbageFlag {
   final String status;
   final dynamic modelVersion;
   final int trashCount;
+  final bool isPlaceholder;
 
   GarbageFlag({
     required this.id,
@@ -38,7 +39,10 @@ class GarbageFlag {
     required this.status,
     this.modelVersion,
     this.trashCount = 1,
+    this.isPlaceholder = false,
   });
+
+  bool get isRealFlag => !isPlaceholder;
 
   bool matchesModelVersion(int version) {
     if (modelVersion == null) return true;
@@ -114,6 +118,20 @@ class GarbageFlag {
         rawDisplayClass.toLowerCase().contains('no trash') ||
         rawDisplayClass.toLowerCase().contains('clean');
 
+    // Detect placeholder vs real flag
+    bool isPh = false;
+    if (json['is_placeholder'] == true || json['placeholder'] == true) {
+      isPh = true;
+    } else if (json['is_placeholder'] == false || json['placeholder'] == false || json['is_real'] == true) {
+      isPh = false;
+    } else if (json['session_id'] != null && json['session_id'].toString().isNotEmpty) {
+      isPh = false;
+    } else if (json['point_type'] != null && json['point_type'].toString().isNotEmpty) {
+      isPh = false;
+    } else if (docKey.toLowerCase().startsWith('flag_') || docKey.toLowerCase().startsWith('seed_')) {
+      isPh = true;
+    }
+
     return GarbageFlag(
       id: docId ?? json['id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
       filename: json['filename'] ?? 'snapshot',
@@ -132,6 +150,7 @@ class GarbageFlag {
       status: json['status'] ?? 'Flagged',
       modelVersion: json['model_version'] ?? json['modelVersion'],
       trashCount: tCount ?? (isClean ? 0 : 1),
+      isPlaceholder: isPh,
     );
   }
 }

@@ -30,6 +30,19 @@ class _DatabaseScreenState extends State<DatabaseScreen> with SingleTickerProvid
   };
   String _selectedFolder = 'All';
   int _selectedNavIndex = 0; // 0: Analysed Images, 1: Training Dataset (Raw)
+  int _galleryViewMode = 0; // 0: Horizontal Feed (Carousel), 1: Horizontal Rows, 2: Grid View
+  final ScrollController _horizontalScrollController = ScrollController();
+
+  void _scrollHorizontal(bool forward) {
+    if (!_horizontalScrollController.hasClients) return;
+    final step = forward ? 460.0 : -460.0;
+    final target = (_horizontalScrollController.offset + step).clamp(0.0, _horizontalScrollController.position.maxScrollExtent);
+    _horizontalScrollController.animateTo(
+      target,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
+  }
 
   @override
   void initState() {
@@ -152,6 +165,7 @@ class _DatabaseScreenState extends State<DatabaseScreen> with SingleTickerProvid
   void dispose() {
     _timer?.cancel();
     _pulseController.dispose();
+    _horizontalScrollController.dispose();
     super.dispose();
   }
 
@@ -706,23 +720,47 @@ class _DatabaseScreenState extends State<DatabaseScreen> with SingleTickerProvid
               ),
             SizedBox(height: isMobile ? 16 : 24),
             
-            // Gallery Title
+            // Gallery Header & View Mode Switcher
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  isAnalysedView ? "Captured Snapshots (Analysed)" : "Training Dataset (Raw Captures)",
-                  style: TextStyle(color: Colors.white, fontSize: isMobile ? 16 : 20, fontWeight: FontWeight.bold),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      isAnalysedView ? "Captured Snapshots (Analysed)" : "Training Dataset (Raw Captures)",
+                      style: TextStyle(color: Colors.white, fontSize: isMobile ? 16 : 20, fontWeight: FontWeight.bold),
+                    ),
+                    Text(
+                      isAnalysedView 
+                          ? "Showing ${_getFilteredSnapshots().length} analysed detections (${_selectedFolder})" 
+                          : "Showing ${_getFilteredSnapshots().length} raw captures (${_selectedFolder})",
+                      style: TextStyle(color: const Color(0xFF8A8F9D), fontSize: isMobile ? 10 : 12),
+                    ),
+                  ],
                 ),
-                Text(
-                  isAnalysedView ? "Live detections" : "Raw camera frames",
-                  style: TextStyle(color: const Color(0xFF8A8F9D), fontSize: isMobile ? 11 : 13),
+                // View Mode Switcher: 0: Horizontal Feed (Default), 1: Horizontal Rows, 2: Grid View
+                Container(
+                  padding: const EdgeInsets.all(3),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF161822),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFF232738)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _buildViewModeToggle(0, LucideIcons.columns, 'Horizontal Feed', isMobile),
+                      _buildViewModeToggle(1, LucideIcons.list, 'Horizontal Rows', isMobile),
+                      _buildViewModeToggle(2, LucideIcons.layoutGrid, 'Grid View', isMobile),
+                    ],
+                  ),
                 ),
               ],
             ),
             SizedBox(height: isMobile ? 12 : 16),
 
-            // Gallery Grid
+            // Gallery Display
             Expanded(
               child: _getFilteredSnapshots().isEmpty
                   ? Center(
@@ -733,222 +771,577 @@ class _DatabaseScreenState extends State<DatabaseScreen> with SingleTickerProvid
                         style: const TextStyle(color: Color(0xFF8A8F9D), fontSize: 16),
                       ),
                     )
-                  : GridView.builder(
-                      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                        maxCrossAxisExtent: 350,
-                        childAspectRatio: 0.82,
-                        crossAxisSpacing: 20,
-                        mainAxisSpacing: 20,
-                      ),
-                      itemCount: _getFilteredSnapshots().length,
-                      itemBuilder: (context, index) {
-                        final snap = _getFilteredSnapshots()[index];
-                        final className = snap['display_class'] ?? 'Unknown';
-                        final confidence = (snap['confidence'] ?? 0.0) * 100;
-                        final color = _getClassColor(className);
-                        final timestamp = snap['timestamp'] ?? 'Unknown Time';
-                        final vehicle = snap['vehicle_number'] ?? 'Fleet Capture';
-                        
-                        // Select between raw image and analysed image
-                        final annotatedUrl = '$activeGarbageAiUrl${snap['image_url']}';
-                        final rawRelative = snap['raw_image_url'] ?? snap['image_url'];
-                        final rawUrl = '$activeGarbageAiUrl$rawRelative';
-                        
-                        final activeDisplayUrl = isAnalysedView ? annotatedUrl : rawUrl;
+                  : (_galleryViewMode == 0
+                      ? _buildHorizontalFeedView(_getFilteredSnapshots(), isAnalysedView, isMobile)
+                      : (_galleryViewMode == 1
+                          ? _buildHorizontalRowsView(_getFilteredSnapshots(), isAnalysedView, isMobile)
+                          : _buildGridView(_getFilteredSnapshots(), isAnalysedView, isMobile))),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
-                        return Container(
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF161822),
-                            border: Border.all(
-                              color: isAnalysedView 
-                                  ? color.withOpacity(0.3) 
-                                  : color.withOpacity(0.6),
-                              width: isAnalysedView ? 1 : 1.5,
-                            ),
-                            borderRadius: BorderRadius.circular(16),
-                            boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 5))],
+  Widget _buildViewModeToggle(int mode, IconData icon, String label, bool isMobile) {
+    final isSelected = _galleryViewMode == mode;
+    return GestureDetector(
+      onTap: () => setState(() => _galleryViewMode = mode),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: EdgeInsets.symmetric(horizontal: isMobile ? 8 : 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFF00F2FE).withOpacity(0.18) : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+          border: isSelected ? Border.all(color: const Color(0xFF00F2FE), width: 1) : null,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: isMobile ? 14 : 16,
+              color: isSelected ? const Color(0xFF00F2FE) : const Color(0xFF8A8F9D),
+            ),
+            if (!isMobile) ...[
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  color: isSelected ? Colors.white : const Color(0xFF8A8F9D),
+                  fontSize: 11,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHorizontalFeedView(List<dynamic> items, bool isAnalysedView, bool isMobile) {
+    final cardWidth = isMobile ? 320.0 : 480.0;
+    return Stack(
+      children: [
+        ListView.builder(
+          controller: _horizontalScrollController,
+          scrollDirection: Axis.horizontal,
+          physics: const BouncingScrollPhysics(),
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+          itemCount: items.length,
+          itemBuilder: (context, index) {
+            final snap = items[index];
+            return Container(
+              width: cardWidth,
+              margin: const EdgeInsets.only(right: 18),
+              child: _buildSnapshotCard(snap, isAnalysedView, isHorizontalFeed: true, isMobile: isMobile, index: index, total: items.length),
+            );
+          },
+        ),
+        if (!isMobile && items.length > 1) ...[
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            child: Center(
+              child: Container(
+                margin: const EdgeInsets.only(left: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F172A).withOpacity(0.85),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: const Color(0xFF334155)),
+                ),
+                child: IconButton(
+                  icon: const Icon(LucideIcons.chevronLeft, color: Colors.white, size: 22),
+                  onPressed: () => _scrollHorizontal(false),
+                  tooltip: 'Scroll Previous',
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            right: 0,
+            top: 0,
+            bottom: 0,
+            child: Center(
+              child: Container(
+                margin: const EdgeInsets.only(right: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F172A).withOpacity(0.85),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: const Color(0xFF334155)),
+                ),
+                child: IconButton(
+                  icon: const Icon(LucideIcons.chevronRight, color: Colors.white, size: 22),
+                  onPressed: () => _scrollHorizontal(true),
+                  tooltip: 'Scroll Next',
+                ),
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildHorizontalRowsView(List<dynamic> items, bool isAnalysedView, bool isMobile) {
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      itemCount: items.length,
+      itemBuilder: (context, index) {
+        final snap = items[index];
+        return Container(
+          margin: const EdgeInsets.only(bottom: 14),
+          child: _buildHorizontalRowCard(snap, isAnalysedView, isMobile: isMobile, index: index, total: items.length),
+        );
+      },
+    );
+  }
+
+  Widget _buildGridView(List<dynamic> items, bool isAnalysedView, bool isMobile) {
+    return GridView.builder(
+      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: 350,
+        childAspectRatio: 0.82,
+        crossAxisSpacing: 20,
+        mainAxisSpacing: 20,
+      ),
+      itemCount: items.length,
+      itemBuilder: (context, index) {
+        final snap = items[index];
+        return _buildSnapshotCard(snap, isAnalysedView, isHorizontalFeed: false, isMobile: isMobile, index: index, total: items.length);
+      },
+    );
+  }
+
+  Widget _buildSnapshotCard(
+    Map<String, dynamic> snap,
+    bool isAnalysedView, {
+    required bool isHorizontalFeed,
+    required bool isMobile,
+    int? index,
+    int? total,
+  }) {
+    final className = snap['display_class'] ?? 'Unknown';
+    final confidence = (snap['confidence'] ?? 0.0) * 100;
+    final color = _getClassColor(className);
+    final timestamp = snap['timestamp'] ?? 'Unknown Time';
+    final vehicle = snap['vehicle_number'] ?? 'Fleet Capture';
+
+    // Select between raw image and analysed image
+    final annotatedUrl = '$activeGarbageAiUrl${snap['image_url']}';
+    final rawRelative = snap['raw_image_url'] ?? snap['image_url'];
+    final rawUrl = '$activeGarbageAiUrl$rawRelative';
+    final activeDisplayUrl = isAnalysedView ? annotatedUrl : rawUrl;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF161822),
+        border: Border.all(
+          color: isAnalysedView ? color.withOpacity(0.3) : color.withOpacity(0.6),
+          width: isAnalysedView ? 1 : 1.5,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 5))],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Image Section
+          Expanded(
+            flex: isHorizontalFeed ? 6 : 5,
+            child: Stack(
+              children: [
+                Container(
+                  width: double.infinity,
+                  height: double.infinity,
+                  decoration: const BoxDecoration(
+                    border: Border(bottom: BorderSide(color: Color(0xFF232738))),
+                  ),
+                  child: GestureDetector(
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => FullScreenImageScreen(
+                            imageUrl: activeDisplayUrl,
+                            alternateImageUrl: isAnalysedView ? rawUrl : annotatedUrl,
+                            title: isAnalysedView ? 'Analysed Inspection' : 'Raw Training Capture',
+                            tag: className,
+                            isRaw: !isAnalysedView,
                           ),
-                          clipBehavior: Clip.antiAlias,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // Image Section
-                              Expanded(
-                                child: Stack(
-                                  children: [
-                                    Container(
-                                      width: double.infinity,
-                                      height: double.infinity,
-                                      decoration: const BoxDecoration(
-                                        border: Border(bottom: BorderSide(color: Color(0xFF232738))),
-                                      ),
-                                      child: GestureDetector(
-                                        onTap: () {
-                                          Navigator.push(
-                                            context,
-                                            MaterialPageRoute(
-                                              builder: (context) => FullScreenImageScreen(
-                                                imageUrl: activeDisplayUrl,
-                                                alternateImageUrl: isAnalysedView ? rawUrl : annotatedUrl,
-                                                title: isAnalysedView ? 'Analysed Inspection' : 'Raw Training Capture',
-                                                tag: className,
-                                                isRaw: !isAnalysedView,
-                                              ),
-                                            ),
-                                          );
-                                        },
-                                        child: Image.network(
-                                          activeDisplayUrl,
-                                          headers: const {'ngrok-skip-browser-warning': 'true'},
-                                          fit: BoxFit.cover,
-                                          errorBuilder: (ctx, err, stack) => const Center(
-                                            child: Icon(LucideIcons.imageOff, color: Colors.white24, size: 40),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                    // Raw Mode Top Badge
-                                    if (!isAnalysedView)
-                                      Positioned(
-                                        top: 8,
-                                        left: 8,
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                          decoration: BoxDecoration(
-                                            color: Colors.black.withOpacity(0.75),
-                                            borderRadius: BorderRadius.circular(6),
-                                            border: Border.all(color: const Color(0xFF00F2FE), width: 1),
-                                          ),
-                                          child: const Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Icon(LucideIcons.camera, color: Color(0xFF00F2FE), size: 12),
-                                              SizedBox(width: 4),
-                                              Text(
-                                                "RAW (NO ANNOTATIONS)",
-                                                style: TextStyle(color: Color(0xFF00F2FE), fontSize: 9, fontWeight: FontWeight.bold),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                              ),
-                              // Card Info Section
-                              Padding(
-                                padding: const EdgeInsets.all(12.0),
-                                child: isAnalysedView
-                                    ? Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                            decoration: BoxDecoration(
-                                              color: color.withOpacity(0.15),
-                                              borderRadius: BorderRadius.circular(20),
-                                            ),
-                                            child: Text(
-                                              className == 'No Trash / Clean Roads' ? 'CLEAN ROAD' : className.toUpperCase(),
-                                              style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.bold),
-                                            ),
-                                          ),
-                                          const SizedBox(height: 8),
-                                          Row(
-                                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                            children: [
-                                              Text(
-                                                className == 'Very Dirty Road'
-                                                    ? "Severe Dirty"
-                                                    : (className == 'Trash Detected' ? "Litter Detected" : "Clean Surface"),
-                                                style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
-                                              ),
-                                              Text(
-                                                "${snap['trash_count'] ?? (className == 'No Trash / Clean Roads' ? 0 : 1)} Item(s)",
-                                                style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.bold),
-                                              ),
-                                            ],
-                                          ),
-                                          const SizedBox(height: 2),
-                                          Text(
-                                            "Cleanliness Score: ${(snap['cleanliness_score'] ?? confidence).toStringAsFixed(1)}%",
-                                            style: TextStyle(color: color.withOpacity(0.9), fontSize: 11, fontWeight: FontWeight.w600),
-                                          ),
-                                          const SizedBox(height: 3),
-                                          Text(
-                                            "Vehicle: $vehicle",
-                                            style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
-                                          ),
-                                          const SizedBox(height: 3),
-                                          Text(
-                                            timestamp,
-                                            style: const TextStyle(color: Color(0xFF8A8F9D), fontSize: 11),
-                                          ),
-                                        ],
-                                      )
-                                    : Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          // Prominent Classification Tag Badge for Training Set
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                                            decoration: BoxDecoration(
-                                              color: color.withOpacity(0.2),
-                                              border: Border.all(color: color, width: 1.5),
-                                              borderRadius: BorderRadius.circular(8),
-                                            ),
-                                            child: Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                Icon(
-                                                  className == 'Very Dirty Road'
-                                                      ? LucideIcons.alertOctagon
-                                                      : (className == 'Trash Detected'
-                                                          ? LucideIcons.alertTriangle
-                                                          : LucideIcons.checkCircle2),
-                                                  color: color,
-                                                  size: 14,
-                                                ),
-                                                const SizedBox(width: 6),
-                                                Text(
-                                                  "TAG: ${className == 'No Trash / Clean Roads' ? 'CLEAN ROAD' : className.toUpperCase()}",
-                                                  style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w800),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                          const SizedBox(height: 8),
-                                          Row(
-                                            children: [
-                                              const Icon(LucideIcons.tag, size: 12, color: Color(0xFFA855F7)),
-                                              const SizedBox(width: 4),
-                                              Text(
-                                                className == 'Very Dirty Road'
-                                                    ? "Dataset Tag: very_dirty"
-                                                    : (className == 'Trash Detected' ? "Dataset Tag: trash" : "Dataset Tag: clean_road"),
-                                                style: const TextStyle(color: Color(0xFFD8B4FE), fontSize: 12, fontWeight: FontWeight.w600),
-                                              ),
-                                            ],
-                                          ),
-                                          const SizedBox(height: 3),
-                                          Text(
-                                            "Vehicle: $vehicle",
-                                            style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
-                                          ),
-                                          const SizedBox(height: 3),
-                                          Text(
-                                            timestamp,
-                                            style: const TextStyle(color: Color(0xFF8A8F9D), fontSize: 11),
-                                          ),
-                                        ],
-                                      ),
-                              )
-                            ],
+                        ),
+                      );
+                    },
+                    child: Image.network(
+                      activeDisplayUrl,
+                      headers: const {'ngrok-skip-browser-warning': 'true'},
+                      fit: BoxFit.cover,
+                      errorBuilder: (ctx, err, stack) => const Center(
+                        child: Icon(LucideIcons.imageOff, color: Colors.white24, size: 40),
+                      ),
+                    ),
+                  ),
+                ),
+                // Raw Mode Top Badge
+                if (!isAnalysedView)
+                  Positioned(
+                    top: 8,
+                    left: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.75),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: const Color(0xFF00F2FE), width: 1),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(LucideIcons.camera, color: Color(0xFF00F2FE), size: 12),
+                          SizedBox(width: 4),
+                          Text(
+                            "RAW (NO ANNOTATIONS)",
+                            style: TextStyle(color: Color(0xFF00F2FE), fontSize: 9, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                // Index Indicator in Horizontal Feed
+                if (isHorizontalFeed && index != null && total != null)
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.75),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white24),
+                      ),
+                      child: Text(
+                        '#${index + 1} of $total',
+                        style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          // Card Info Section
+          Padding(
+            padding: const EdgeInsets.all(12.0),
+            child: isAnalysedView
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: color.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              className == 'No Trash / Clean Roads' ? 'CLEAN ROAD' : className.toUpperCase(),
+                              style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          Text(
+                            "${snap['trash_count'] ?? (className == 'No Trash / Clean Roads' ? 0 : 1)} Item(s)",
+                            style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            className == 'Very Dirty Road'
+                                ? "Severe Dirty"
+                                : (className == 'Trash Detected' ? "Litter Detected" : "Clean Surface"),
+                            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                          ),
+                          Text(
+                            "Score: ${(snap['cleanliness_score'] ?? confidence).toStringAsFixed(1)}%",
+                            style: TextStyle(color: color.withOpacity(0.9), fontSize: 11, fontWeight: FontWeight.w600),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 3),
+                      Row(
+                        children: [
+                          const Icon(LucideIcons.truck, size: 12, color: Color(0xFF94A3B8)),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              vehicle,
+                              style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 3),
+                      Row(
+                        children: [
+                          const Icon(LucideIcons.clock, size: 12, color: Color(0xFF8A8F9D)),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              timestamp,
+                              style: const TextStyle(color: Color(0xFF8A8F9D), fontSize: 11),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: color.withOpacity(0.2),
+                          border: Border.all(color: color, width: 1.5),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              className == 'Very Dirty Road'
+                                  ? LucideIcons.alertOctagon
+                                  : (className == 'Trash Detected'
+                                      ? LucideIcons.alertTriangle
+                                      : LucideIcons.checkCircle2),
+                              color: color,
+                              size: 14,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              "TAG: ${className == 'No Trash / Clean Roads' ? 'CLEAN ROAD' : className.toUpperCase()}",
+                              style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w800),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          const Icon(LucideIcons.tag, size: 12, color: Color(0xFFA855F7)),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              className == 'Very Dirty Road'
+                                  ? "Dataset Tag: very_dirty"
+                                  : (className == 'Trash Detected' ? "Dataset Tag: trash" : "Dataset Tag: clean_road"),
+                              style: const TextStyle(color: Color(0xFFD8B4FE), fontSize: 12, fontWeight: FontWeight.w600),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 3),
+                      Row(
+                        children: [
+                          const Icon(LucideIcons.truck, size: 12, color: Color(0xFF94A3B8)),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              vehicle,
+                              style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 3),
+                      Row(
+                        children: [
+                          const Icon(LucideIcons.clock, size: 12, color: Color(0xFF8A8F9D)),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              timestamp,
+                              style: const TextStyle(color: Color(0xFF8A8F9D), fontSize: 11),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+          )
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHorizontalRowCard(
+    Map<String, dynamic> snap,
+    bool isAnalysedView, {
+    required bool isMobile,
+    int? index,
+    int? total,
+  }) {
+    final className = snap['display_class'] ?? 'Unknown';
+    final confidence = (snap['confidence'] ?? 0.0) * 100;
+    final color = _getClassColor(className);
+    final timestamp = snap['timestamp'] ?? 'Unknown Time';
+    final vehicle = snap['vehicle_number'] ?? 'Fleet Capture';
+
+    final annotatedUrl = '$activeGarbageAiUrl${snap['image_url']}';
+    final rawRelative = snap['raw_image_url'] ?? snap['image_url'];
+    final rawUrl = '$activeGarbageAiUrl$rawRelative';
+    final activeDisplayUrl = isAnalysedView ? annotatedUrl : rawUrl;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF161822),
+        border: Border.all(color: color.withOpacity(0.35), width: 1.5),
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 6, offset: Offset(0, 3))],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Left Image (Wide 16:9 Thumbnail)
+            SizedBox(
+              width: isMobile ? 130 : 240,
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: GestureDetector(
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => FullScreenImageScreen(
+                              imageUrl: activeDisplayUrl,
+                              alternateImageUrl: isAnalysedView ? rawUrl : annotatedUrl,
+                              title: isAnalysedView ? 'Analysed Inspection' : 'Raw Training Capture',
+                              tag: className,
+                              isRaw: !isAnalysedView,
+                            ),
                           ),
                         );
                       },
+                      child: Image.network(
+                        activeDisplayUrl,
+                        headers: const {'ngrok-skip-browser-warning': 'true'},
+                        fit: BoxFit.cover,
+                        errorBuilder: (ctx, err, stack) => const Center(
+                          child: Icon(LucideIcons.imageOff, color: Colors.white24, size: 32),
+                        ),
+                      ),
                     ),
+                  ),
+                  Positioned(
+                    bottom: 6,
+                    right: 6,
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.7),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Icon(LucideIcons.maximize2, color: Colors.white70, size: 14),
+                    ),
+                  ),
+                ],
+              ),
             ),
+            // Right Metadata Content
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: color.withOpacity(0.18),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: color.withOpacity(0.5)),
+                          ),
+                          child: Text(
+                            className == 'No Trash / Clean Roads' ? 'CLEAN ROAD' : className.toUpperCase(),
+                            style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        if (index != null && total != null)
+                          Text(
+                            '#${index + 1} / $total',
+                            style: const TextStyle(color: Color(0xFF8A8F9D), fontSize: 11, fontWeight: FontWeight.w600),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Text(
+                          className == 'Very Dirty Road'
+                              ? "Severe Dirty"
+                              : (className == 'Trash Detected' ? "Litter Detected" : "Clean Surface"),
+                          style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          "•  ${snap['trash_count'] ?? (className == 'No Trash / Clean Roads' ? 0 : 1)} Item(s)",
+                          style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600),
+                        ),
+                        const Spacer(),
+                        Text(
+                          "Score: ${(snap['cleanliness_score'] ?? confidence).toStringAsFixed(1)}%",
+                          style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        const Icon(LucideIcons.truck, size: 12, color: Color(0xFF94A3B8)),
+                        const SizedBox(width: 4),
+                        Text("Vehicle: $vehicle", style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11)),
+                        const SizedBox(width: 14),
+                        const Icon(LucideIcons.clock, size: 12, color: Color(0xFF8A8F9D)),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            timestamp,
+                            style: const TextStyle(color: Color(0xFF8A8F9D), fontSize: 11),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
           ],
         ),
       ),

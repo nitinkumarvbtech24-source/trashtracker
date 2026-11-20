@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../constants.dart';
 import '../models/garbage_flag.dart';
 
@@ -11,6 +12,24 @@ class TrashSpotsService {
   static final TrashSpotsService instance = TrashSpotsService._internal();
 
   final ValueNotifier<List<GarbageFlag>> flagsNotifier = ValueNotifier<List<GarbageFlag>>([]);
+  final ValueNotifier<bool> showPlaceholdersNotifier = ValueNotifier<bool>(true);
+
+  bool get showPlaceholders => showPlaceholdersNotifier.value;
+
+  Future<void> setShowPlaceholders(bool value) async {
+    if (showPlaceholdersNotifier.value != value) {
+      showPlaceholdersNotifier.value = value;
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('show_placeholder_flags', value);
+      } catch (_) {}
+      _mergeAndNotify();
+    }
+  }
+
+  void toggleShowPlaceholders() {
+    setShowPlaceholders(!showPlaceholdersNotifier.value);
+  }
   
   List<GarbageFlag> _firestoreFlags = [];
   List<GarbageFlag> _backendFlags = [];
@@ -23,6 +42,15 @@ class TrashSpotsService {
   void init() {
     if (_initialized) return;
     _initialized = true;
+
+    try {
+      SharedPreferences.getInstance().then((prefs) {
+        final saved = prefs.getBool('show_placeholder_flags');
+        if (saved != null) {
+          showPlaceholdersNotifier.value = saved;
+        }
+      });
+    } catch (_) {}
 
     // 1. Listen to Firestore collection 'trash_spots'
     try {
@@ -180,8 +208,19 @@ class TrashSpotsService {
 
   List<GarbageFlag> get allFlags => flagsNotifier.value;
 
+  List<GarbageFlag> get allTrashFlags => flagsNotifier.value.where((f) => f.isTrashDetected).toList();
+  List<GarbageFlag> get realFlags => flagsNotifier.value.where((f) => f.isTrashDetected && !f.isPlaceholder).toList();
+  List<GarbageFlag> get placeholderFlags => flagsNotifier.value.where((f) => f.isTrashDetected && f.isPlaceholder).toList();
+
+  int get realFlagsCount => realFlags.length;
+  int get allTrashFlagsCount => allTrashFlags.length;
+
   List<GarbageFlag> get activeFlags {
-    return flagsNotifier.value.where((f) => f.isTrashDetected).toList();
+    return flagsNotifier.value.where((f) {
+      if (!f.isTrashDetected) return false;
+      if (!showPlaceholders && f.isPlaceholder) return false;
+      return true;
+    }).toList();
   }
 
   List<GarbageFlag> getFlagsForVehicle(String vehicleNumber) {

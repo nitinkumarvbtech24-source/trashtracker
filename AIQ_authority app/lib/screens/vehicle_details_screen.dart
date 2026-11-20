@@ -21,6 +21,7 @@ import '../services/ward_zone_service.dart';
 import '../services/trash_spots_service.dart';
 import '../models/trail_segment.dart';
 import '../widgets/trash_flag_inspection_modal.dart';
+import '../widgets/placeholder_map_switch.dart';
 
 class VehicleDetailsScreen extends StatefulWidget {
   final Vehicle vehicle;
@@ -162,6 +163,7 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
 
   Future<void> _fetchGarbageFlags() async {
     TrashSpotsService.instance.flagsNotifier.addListener(_onTrashSpotsUpdate);
+    TrashSpotsService.instance.showPlaceholdersNotifier.addListener(_onTrashSpotsUpdate);
     _updateVehicleFlags();
 
     _trashSub?.cancel();
@@ -175,6 +177,7 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
   void dispose() {
     WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
     TrashSpotsService.instance.flagsNotifier.removeListener(_onTrashSpotsUpdate);
+    TrashSpotsService.instance.showPlaceholdersNotifier.removeListener(_onTrashSpotsUpdate);
     _dailyStatsSub?.cancel();
     _vehicleSub?.cancel();
     _liveTrackingSub?.cancel();
@@ -1099,6 +1102,11 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
                 ],
               ),
           ],
+        ),
+        Positioned(
+          top: 14,
+          right: 14,
+          child: const PlaceholderMapSwitch(isDark: false),
         ),
       ],
     );

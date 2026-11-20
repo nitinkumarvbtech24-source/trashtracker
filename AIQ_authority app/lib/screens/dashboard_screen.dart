@@ -22,6 +22,7 @@ import '../services/trash_spots_service.dart';
 import '../models/garbage_flag.dart';
 import '../models/trail_segment.dart';
 import '../widgets/trash_flag_inspection_modal.dart';
+import '../widgets/placeholder_map_switch.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -94,6 +95,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     super.initState();
     WardZoneService.instance.init();
     WardZoneService.instance.notifier.addListener(_onWardZoneUpdate);
+    TrashSpotsService.instance.showPlaceholdersNotifier.addListener(_onWardZoneUpdate);
     _fetchDataFromFirestore();
     _startLiveTrackingListener();
   }
@@ -283,6 +285,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void dispose() {
     WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
     TrashSpotsService.instance.flagsNotifier.removeListener(_onTrashSpotsUpdate);
+    TrashSpotsService.instance.showPlaceholdersNotifier.removeListener(_onWardZoneUpdate);
     _liveTrackingSub?.cancel();
     _vehiclesSub?.cancel();
     _wardsSub?.cancel();
@@ -446,7 +449,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   List<Map<String, dynamic>> get _filteredTrashSpots {
+    final showPh = TrashSpotsService.instance.showPlaceholders;
     return _trashSpots.where((spot) {
+      if (!showPh) {
+        final isPh = spot['is_placeholder'] == true || (spot['id'] ?? '').toString().toLowerCase().startsWith('flag_') || (spot['id'] ?? '').toString().toLowerCase().startsWith('seed_');
+        if (isPh) return false;
+      }
+
       final lat = ((spot['lat'] ?? 0.0) as num).toDouble();
       final lng = ((spot['lng'] ?? 0.0) as num).toDouble();
       final zone = spot['zone']?.toString();
@@ -2002,28 +2011,37 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                   ),
                   
-                  // Map Vehicle Legend
+                  // Map Vehicle Legend & Placeholder Switch
                   Positioned(
                     bottom: 16,
                     left: 16,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(20),
-                        boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4)],
-                      ),
-                      child: Row(
-                        children: [
-                          _buildLegendItem(Colors.green, 'Moving'),
-                          const SizedBox(width: 12),
-                          _buildLegendItem(Colors.grey, 'Idle'),
-                          const SizedBox(width: 12),
-                          _buildLegendItem(Colors.red, 'Stopped'),
-                          const SizedBox(width: 12),
-                          _buildLegendItem(Colors.orange, 'Maintenance'),
-                        ],
-                      ),
+                    child: Wrap(
+                      spacing: 10,
+                      runSpacing: 6,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(20),
+                            boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4)],
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _buildLegendItem(Colors.green, 'Moving'),
+                              const SizedBox(width: 12),
+                              _buildLegendItem(Colors.grey, 'Idle'),
+                              const SizedBox(width: 12),
+                              _buildLegendItem(Colors.red, 'Stopped'),
+                              const SizedBox(width: 12),
+                              _buildLegendItem(Colors.orange, 'Maintenance'),
+                            ],
+                          ),
+                        ),
+                        const PlaceholderMapSwitch(isDark: false),
+                      ],
                     ),
                   ),
 

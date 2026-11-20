@@ -952,6 +952,8 @@ class CameraService extends ChangeNotifier {
             'model_version': 'v7_mobilenetv3',
             'trash_count': (resBody['trash_count'] as num?)?.toInt() ?? 1,
             'mobilenet_result': mobilenetResult,
+            'is_placeholder': false,
+            'is_real': true,
             if (sessionId != null) 'session_id': sessionId,
             if (pointType != null) 'point_type': pointType,
           });

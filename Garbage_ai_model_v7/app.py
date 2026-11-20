@@ -1146,7 +1146,9 @@ async def process_frame(req: FrameRequest):
         "zone": req.zone,
         "timestamp": datetime.now().strftime("%Y-%m-%d %I:%M:%S %p"),
         "model_version": "v7_mobilenetv3",
-        "mobilenet_result": res.get("mobilenet_result", {})
+        "mobilenet_result": res.get("mobilenet_result", {}),
+        "is_placeholder": False,
+        "is_real": True,
     }
     
     _recent_image_cache[img_hash] = (now_time, snapshot)
