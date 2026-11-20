@@ -17,6 +17,7 @@ import '../models/zone.dart';
 import '../models/garbage_flag.dart';
 import '../services/role_service.dart';
 import 'vehicle_details_screen.dart';
+import '../models/trail_segment.dart';
 import '../services/ward_zone_service.dart';
 import '../services/trash_spots_service.dart';
 import '../widgets/trash_pinpoint_marker.dart';
@@ -45,6 +46,32 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
   StreamSubscription? _wardsSub;
   StreamSubscription? _zonesSub;
   Map<String, Map<String, dynamic>> _liveTrackingData = {};
+  final Map<String, StreamSubscription> _vehicleDailyStatsSubs = {};
+  final Map<String, List<Polyline>> _vehicleTrails = {};
+  String get _todayDateString => DateTime.now().toIso8601String().split('T')[0];
+
+  void _syncVehicleTrails(List<Vehicle> vehicles) {
+    for (var v in vehicles) {
+      final vNum = v.vehicleNumber.isNotEmpty ? v.vehicleNumber : v.id;
+      if (!_vehicleDailyStatsSubs.containsKey(vNum)) {
+        _vehicleDailyStatsSubs[vNum] = FirebaseFirestore.instance
+            .collection('vehicles')
+            .doc(vNum)
+            .collection('daily_stats')
+            .doc(_todayDateString)
+            .snapshots()
+            .listen((doc) {
+          if (!mounted) return;
+          if (doc.exists && doc.data() != null) {
+            final polylines = TrailSegment.listFromDailyStats(doc.data());
+            setState(() {
+              _vehicleTrails[vNum] = polylines;
+            });
+          }
+        }, onError: (_) {});
+      }
+    }
+  }
 
   String _searchQuery = '';
   String _selectedZoneFilter = 'All Zones';
@@ -140,6 +167,7 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
           }
         }
         _vehicles = vehicles;
+        _syncVehicleTrails(vehicles);
         if (_selectedVehicle != null) {
           final index = _vehicles.indexWhere((v) => v.id == _selectedVehicle!.id);
           if (index != -1) _selectedVehicle = _vehicles[index];
@@ -205,6 +233,10 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
   void dispose() {
     WardZoneService.instance.notifier.removeListener(_onWardZoneUpdate);
     TrashSpotsService.instance.flagsNotifier.removeListener(_onTrashSpotsUpdated);
+    for (var sub in _vehicleDailyStatsSubs.values) {
+      sub.cancel();
+    }
+    _vehicleDailyStatsSubs.clear();
     _liveTrackingSub?.cancel();
     _vehiclesSub?.cancel();
     _wardsSub?.cancel();
@@ -770,6 +802,14 @@ class _ActiveFleetScreenState extends State<ActiveFleetScreen> {
               selectedZone: _selectedZoneFilter,
               selectedWard: _selectedWard?.name ?? _selectedWardFilter,
             ),
+            if (_vehicleTrails.isNotEmpty)
+              PolylineLayer(
+                polylines: <Polyline>[
+                  ...(_selectedVehicle != null
+                      ? (_vehicleTrails[_selectedVehicle!.vehicleNumber] ?? _vehicleTrails[_selectedVehicle!.id] ?? const <Polyline>[])
+                      : _vehicleTrails.values.expand((t) => t)),
+                ],
+              ),
             MarkerLayer(
               markers: filteredVehicles.where((v) => v.currentLocation != null).map((vehicle) {
                   final statusColor = Color(vehicle.stateColorValue);

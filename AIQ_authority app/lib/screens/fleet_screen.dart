@@ -8,7 +8,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_map_cache/flutter_map_cache.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../models/vehicle.dart';
 import '../models/ward.dart';
@@ -22,7 +21,6 @@ import '../widgets/trash_flag_inspection_modal.dart';
 import '../widgets/placeholder_map_switch.dart';
 import '../services/ward_zone_service.dart';
 import '../models/trail_segment.dart';
-import '../widgets/trash_flag_inspection_modal.dart';
 
 enum MapMode { view, drawWard, drawZone }
 
@@ -100,6 +98,7 @@ class _FleetScreenState extends State<FleetScreen> {
       setState(() {
         _selectedDate = picked;
       });
+      _resubscribeDailyStats();
     }
   }
 
@@ -107,7 +106,20 @@ class _FleetScreenState extends State<FleetScreen> {
   final Map<String, StreamSubscription> _dailyStatsSubs = {};
   final Map<String, double> _vehicleDistances = {};
   final Map<String, List<Polyline>> _vehicleTrails = {};
-  String get _todayDateString => DateTime.now().toIso8601String().split('T')[0];
+  String get _selectedDateString => _selectedDate.toIso8601String().split('T')[0];
+
+  void _resubscribeDailyStats() {
+    for (var sub in _dailyStatsSubs.values) {
+      sub.cancel();
+    }
+    _dailyStatsSubs.clear();
+    _vehicleDistances.clear();
+    _vehicleTrails.clear();
+    for (var v in _vehicles) {
+      _subscribeToDailyStats(v.vehicleNumber);
+      _subscribeToDailyStats(v.id);
+    }
+  }
 
   void _subscribeToDailyStats(String vNum) {
     final clean = vNum.trim();
@@ -116,7 +128,7 @@ class _FleetScreenState extends State<FleetScreen> {
         .collection('vehicles')
         .doc(clean)
         .collection('daily_stats')
-        .doc(_todayDateString)
+        .doc(_selectedDateString)
         .snapshots()
         .listen((snap) {
       if (snap.exists && snap.data() != null) {
@@ -674,8 +686,8 @@ class _FleetScreenState extends State<FleetScreen> {
 
   Widget _buildKPICard(String title, String value, String subtitle, IconData icon, Color iconColor, {Color subtitleColor = const Color(0xFF10B981), bool isMobile = false}) {
     return Container(
-      constraints: BoxConstraints(minHeight: isMobile ? 80 : 96),
-      padding: EdgeInsets.symmetric(horizontal: isMobile ? 8 : 14, vertical: isMobile ? 6 : 10),
+      constraints: BoxConstraints(minHeight: isMobile ? 80 : 100),
+      padding: EdgeInsets.symmetric(horizontal: isMobile ? 8 : 12, vertical: isMobile ? 6 : 8),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
@@ -686,37 +698,37 @@ class _FleetScreenState extends State<FleetScreen> {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Container(
-            width: isMobile ? 34 : 44,
-            height: isMobile ? 34 : 44,
+            width: isMobile ? 34 : 40,
+            height: isMobile ? 34 : 40,
             decoration: BoxDecoration(
               color: iconColor.withOpacity(0.1),
               borderRadius: BorderRadius.circular(10),
             ),
-            child: Icon(icon, color: iconColor, size: isMobile ? 18 : 22),
+            child: Icon(icon, color: iconColor, size: isMobile ? 18 : 20),
           ),
-          SizedBox(width: isMobile ? 8 : 12),
+          SizedBox(width: isMobile ? 8 : 10),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  title,
-                  style: GoogleFonts.inter(
-                    fontSize: isMobile ? 9 : 10,
-                    fontWeight: FontWeight.bold,
-                    color: const Color(0xFF4B5563),
-                    letterSpacing: 0.3,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    title,
+                    style: GoogleFonts.inter(
+                      fontSize: isMobile ? 9 : 10,
+                      fontWeight: FontWeight.bold,
+                      color: const Color(0xFF4B5563),
+                      letterSpacing: 0.3,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 2),
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerLeft,
-                  child: Text(
+                  const SizedBox(height: 2),
+                  Text(
                     value,
                     style: GoogleFonts.inter(
                       fontSize: isMobile ? 18 : 22,
@@ -724,19 +736,19 @@ class _FleetScreenState extends State<FleetScreen> {
                       color: const Color(0xFF111827),
                     ),
                   ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: GoogleFonts.inter(
-                    fontSize: isMobile ? 9 : 11,
-                    fontWeight: FontWeight.w700,
-                    color: subtitleColor,
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: GoogleFonts.inter(
+                      fontSize: isMobile ? 9 : 11,
+                      fontWeight: FontWeight.w700,
+                      color: subtitleColor,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ],
