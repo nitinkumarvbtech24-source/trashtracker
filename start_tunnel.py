@@ -212,7 +212,7 @@ def run_cloudflare_worker():
         for line in iter(proc.stdout.readline, ""):
             if not cf_detected:
                 match = url_pattern.search(line)
-                if match:
+                if match and "api.trycloudflare.com" not in match.group(0):
                     url = f"https://{match.group(1)}"
                     with state_lock:
                         active_urls["cloudflare"] = url
