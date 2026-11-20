@@ -58,12 +58,43 @@ def update_dart_constants(primary_url: str):
         except Exception as e:
             print(f"⚠️ Error updating {target}: {e}")
 
+def is_healthy(url: str) -> bool:
+    """Checks if a tunnel URL actively returns 200 OK from backend."""
+    if not url:
+        return False
+    try:
+        req = urllib.request.Request(
+            f"{url}/api/health",
+            headers={"ngrok-skip-browser-warning": "69420", "User-Agent": "TunnelChecker/1.0"}
+        )
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
 def broadcast_to_firestore():
     """Publishes both Ngrok and Cloudflare URLs + Quick Connect Code to Firestore."""
     with state_lock:
-        primary = active_urls["ngrok"] or active_urls["cloudflare"] or f"https://{STATIC_NGROK_DOMAIN}"
-        ngrok_val = active_urls["ngrok"] or f"https://{STATIC_NGROK_DOMAIN}"
-        cf_val = active_urls["cloudflare"] or ""
+        cf_val = active_urls.get("cloudflare") or ""
+        ngrok_val = active_urls.get("ngrok") or ""
+
+        # Test health to pick the best working primary
+        cf_ok = is_healthy(cf_val) if cf_val else False
+        ngrok_ok = is_healthy(ngrok_val) if ngrok_val else False
+
+        if cf_ok:
+            primary = cf_val
+        elif ngrok_ok:
+            primary = ngrok_val
+        elif cf_val:
+            primary = cf_val
+        elif ngrok_val:
+            primary = ngrok_val
+        else:
+            primary = f"https://{STATIC_NGROK_DOMAIN}"
+
+    # Also update Dart constants whenever primary is computed
+    update_dart_constants(primary)
 
     try:
         fields = {

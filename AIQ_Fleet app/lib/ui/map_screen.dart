@@ -12,6 +12,9 @@ import '../services/ward_zone_service.dart';
 import '../constants.dart';
 import 'route_assigner_screen.dart';
 import '../widgets/trash_pinpoint_marker.dart';
+import '../models/garbage_flag.dart';
+import '../widgets/trash_flag_inspection_modal.dart';
+import '../widgets/placeholder_map_switch.dart';
 
 class TrailSegment {
   final LatLng start;
@@ -114,7 +117,24 @@ class _MapScreenState extends State<MapScreen> {
   List<Map<String, dynamic>> _trashSpots = [];
   StreamSubscription<QuerySnapshot>? _trashSub;
   bool _showFlags = true;
+  bool _showPlaceholders = true;
   bool _isZoomedInForFlags = false; // Zoom >= 16.5
+
+  Map<String, Map<String, dynamic>> _liveOtherVehicles = {};
+  StreamSubscription<QuerySnapshot>? _liveTrackingSub;
+
+  List<Map<String, dynamic>> get _filteredTrashSpots {
+    if (_showPlaceholders) return _trashSpots;
+    return _trashSpots.where((s) {
+      final isPlaceholder = s['is_placeholder'] == true;
+      final isReal = s['is_real'] == true || s['is_placeholder'] == false;
+      return !isPlaceholder && isReal;
+    }).toList();
+  }
+
+  int get _realFlagsCount => _trashSpots.where((s) {
+    return s['is_placeholder'] != true && (s['is_real'] == true || s['is_placeholder'] == false);
+  }).length;
 
   bool _allowRouteAssignment = false;
   StreamSubscription<DocumentSnapshot>? _permissionsSub;
@@ -133,10 +153,26 @@ class _MapScreenState extends State<MapScreen> {
   void initState() {
     super.initState();
     _startRouteSync();
+    _startLiveTrackingListener();
     
     // Listen to location updates to draw the trail
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<TelemetryService>().addListener(_onLocationUpdate);
+    });
+  }
+
+  void _startLiveTrackingListener() {
+    _liveTrackingSub = FirebaseFirestore.instance.collection('live_tracking').snapshots().listen((snap) {
+      if (!mounted) return;
+      final auth = context.read<AuthService>();
+      final myVeh = (auth.vehicleNumber ?? '').toLowerCase().replaceAll(RegExp(r'[\s\-_]'), '');
+      final Map<String, Map<String, dynamic>> map = {};
+      for (var doc in snap.docs) {
+        final cleanId = doc.id.toLowerCase().replaceAll(RegExp(r'[\s\-_]'), '');
+        if (cleanId.isNotEmpty && cleanId == myVeh) continue; // Don't duplicate self
+        map[doc.id] = doc.data();
+      }
+      setState(() => _liveOtherVehicles = map);
     });
   }
 
@@ -376,6 +412,7 @@ class _MapScreenState extends State<MapScreen> {
     _routeSub?.cancel();
     _trashSub?.cancel();
     _permissionsSub?.cancel();
+    _liveTrackingSub?.cancel();
     super.dispose();
   }
   
@@ -482,76 +519,6 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  void _showTrashPopup(Map<String, dynamic> spot) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1E293B),
-        title: Text(
-          (spot['road_status'] == 'Very Dirty Road' || spot['road_status'] == 'Slightly Dirty Road') 
-              ? 'Trash Detected' 
-              : spot['road_status'] ?? 'Dirty Spot',
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (spot['image_url'] != null)
-              Builder(
-                builder: (context) {
-                  String displayUrl = spot['image_url'];
-                  if (displayUrl.startsWith('http')) {
-                    try {
-                      final uri = Uri.parse(displayUrl);
-                      if (uri.host.contains('ngrok-free.dev')) {
-                        displayUrl = '$activeGarbageAiUrl${uri.path}';
-                      }
-                    } catch (_) {}
-                  } else if (displayUrl.startsWith('/')) {
-                    displayUrl = '$activeGarbageAiUrl$displayUrl';
-                  } else {
-                    displayUrl = '$activeGarbageAiUrl/$displayUrl';
-                  }
-                  
-                  return ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: SizedBox(
-                      width: 400,
-                      child: Image.network(
-                        displayUrl,
-                        headers: const {"ngrok-skip-browser-warning": "true"},
-                        height: 200,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) {
-                          return Container(
-                            height: 200,
-                            color: Colors.black26,
-                            child: const Center(
-                              child: Icon(Icons.image_not_supported, color: Colors.white24, size: 50),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                  );
-                }
-              ),
-            const SizedBox(height: 16),
-            Text(
-              "Confidence: ${((spot['confidence'] ?? 0.0) * 100).toStringAsFixed(1)}%",
-              style: const TextStyle(color: Colors.white70),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close', style: TextStyle(color: Colors.blueAccent)),
-          ),
-        ],
-      ),
-    );
-  }
 
   List<Marker> _buildUniformTrashMarkers(List<Map<String, dynamic>> spots) {
     const double clusterDist = 0.00018; // ~18-20 meters clustering to avoid clumping
@@ -591,7 +558,10 @@ class _MapScreenState extends State<MapScreen> {
         child: TrashPinpointWidget(
           count: cluster.length,
           isVeryDirty: isVeryDirty,
-          onTap: () => _showTrashPopup(rep),
+          onTap: () {
+            final flag = GarbageFlag.fromJson(rep, rep['id']?.toString() ?? '');
+            TrashFlagInspectionModal.show(context, flag);
+          },
         ),
       );
     }).toList();
@@ -804,13 +774,68 @@ class _MapScreenState extends State<MapScreen> {
                 builder: (context) {
                   final camera = MapCamera.of(context);
                   final bool showPins = _showFlags && (camera.zoom >= 14.8);
-                  if (!showPins || _trashSpots.isEmpty) {
+                  final spotsToDisplay = _filteredTrashSpots;
+                  if (!showPins || spotsToDisplay.isEmpty) {
                     return const SizedBox.shrink();
                   }
                   return MarkerLayer(
-                    markers: _getCachedUniformTrashMarkers(_trashSpots),
+                    markers: _getCachedUniformTrashMarkers(spotsToDisplay),
                   );
                 },
+              ),
+
+              // Live Other Fleet Vehicles Layer
+              MarkerLayer(
+                markers: _liveOtherVehicles.entries.where((e) {
+                  final lat = (e.value['lat'] as num?)?.toDouble();
+                  final lng = (e.value['lng'] as num?)?.toDouble();
+                  return lat != null && lng != null && lat != 0.0 && lng != 0.0;
+                }).map((e) {
+                  final data = e.value;
+                  final lat = (data['lat'] as num).toDouble();
+                  final lng = (data['lng'] as num).toDouble();
+                  final isActive = data['isActive'] as bool? ?? false;
+                  final statusColor = isActive ? const Color(0xFF10B981) : const Color(0xFFF59E0B);
+                  final vNum = e.key.toUpperCase();
+
+                  return Marker(
+                    point: LatLng(lat, lng),
+                    width: 90,
+                    height: 55,
+                    alignment: Alignment.center,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF0F172A),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: statusColor, width: 1.5),
+                            boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
+                          ),
+                          child: Text(
+                            vNum,
+                            style: const TextStyle(color: Colors.white, fontSize: 8.5, fontWeight: FontWeight.bold),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: statusColor,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 2),
+                            boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 4, offset: Offset(0, 2))],
+                          ),
+                          child: const Icon(Icons.local_shipping, color: Colors.white, size: 13),
+                        ),
+                      ],
+                    ),
+                  );
+                }).toList(),
               ),
 
               if (currentPos != null)
@@ -841,70 +866,126 @@ class _MapScreenState extends State<MapScreen> {
               ),
             ),
           
-          // Settings Menu
+          // Top Controls Bar: Placeholder Switch & Settings Menu
           Positioned(
-            top: 120,
-            right: 24,
-            child: PopupMenuButton<String>(
-              icon: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: const BoxDecoration(
-                  color: Colors.white,
-                  shape: BoxShape.circle,
-                  boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2))],
+            top: 50,
+            right: 16,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                PlaceholderMapSwitch(
+                  showPlaceholders: _showPlaceholders,
+                  realCount: _realFlagsCount,
+                  totalCount: _trashSpots.length,
+                  onChanged: (val) {
+                    setState(() {
+                      _showPlaceholders = val;
+                      _cachedFleetTrashMarkers.clear();
+                    });
+                  },
+                  isDark: true,
+                  compact: true,
                 ),
-                child: const Icon(Icons.settings, color: Colors.blueAccent),
-              ),
-              onSelected: (value) {
-                if (value == 'toggle_flags') {
-                  setState(() {
-                    _showFlags = !_showFlags;
-                  });
-                } else if (value == 'route_assigner') {
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => const RouteAssignerScreen()));
-                }
-              },
-              itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-                PopupMenuItem<String>(
-                  value: 'toggle_flags',
-                  child: Row(
-                    children: [
-                      Icon(
-                        _showFlags ? Icons.visibility_off : Icons.visibility,
-                        color: Colors.blueAccent,
-                      ),
-                      const SizedBox(width: 12),
-                      Text(_showFlags ? 'Hide Flags' : 'Show Flags', style: const TextStyle(fontWeight: FontWeight.w600)),
-                    ],
-                  ),
-                ),
-                if (_allowRouteAssignment)
-                  PopupMenuItem<String>(
-                    value: 'route_assigner',
-                    child: Row(
-                      children: [
-                        const Icon(
-                          Icons.edit_road_rounded,
-                          color: Colors.orangeAccent,
-                        ),
-                        const SizedBox(width: 12),
-                        const Text('Route Assign Mode', style: TextStyle(fontWeight: FontWeight.w600)),
-                      ],
+                const SizedBox(width: 8),
+                PopupMenuButton<String>(
+                  icon: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: const BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                      boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2))],
                     ),
+                    child: const Icon(Icons.settings, color: Colors.blueAccent),
                   ),
+                  onSelected: (value) {
+                    if (value == 'toggle_flags') {
+                      setState(() {
+                        _showFlags = !_showFlags;
+                      });
+                    } else if (value == 'route_assigner') {
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => const RouteAssignerScreen()));
+                    }
+                  },
+                  itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+                    PopupMenuItem<String>(
+                      value: 'toggle_flags',
+                      child: Row(
+                        children: [
+                          Icon(
+                            _showFlags ? Icons.visibility_off : Icons.visibility,
+                            color: Colors.blueAccent,
+                          ),
+                          const SizedBox(width: 12),
+                          Text(_showFlags ? 'Hide Flags' : 'Show Flags', style: const TextStyle(fontWeight: FontWeight.w600)),
+                        ],
+                      ),
+                    ),
+                    if (_allowRouteAssignment)
+                      PopupMenuItem<String>(
+                        value: 'route_assigner',
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.edit_road_rounded,
+                              color: Colors.orangeAccent,
+                            ),
+                            const SizedBox(width: 12),
+                            const Text('Route Assign Mode', style: TextStyle(fontWeight: FontWeight.w600)),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
               ],
             ),
           ),
           
-          // Current Location Button
+          // Master-Dashboard Style Zoom in / Zoom out & Recenter
           Positioned(
             bottom: 210,
             right: 24,
-            child: FloatingActionButton(
-              heroTag: 'my_location',
-              onPressed: _centerOnCurrentLocation,
-              backgroundColor: Colors.white,
-              child: const Icon(Icons.my_location_rounded, color: Colors.blueAccent),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(10),
+                    boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 6, offset: Offset(0, 2))],
+                  ),
+                  child: Column(
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.add, color: Colors.black87),
+                        tooltip: 'Zoom in',
+                        onPressed: () => _mapController.move(
+                          _mapController.camera.center,
+                          _mapController.camera.zoom + 1,
+                        ),
+                      ),
+                      const SizedBox(
+                        width: 32,
+                        child: Divider(height: 1, thickness: 1, color: Color(0xFFE2E8F0)),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.remove, color: Colors.black87),
+                        tooltip: 'Zoom out',
+                        onPressed: () => _mapController.move(
+                          _mapController.camera.center,
+                          _mapController.camera.zoom - 1,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                FloatingActionButton(
+                  heroTag: 'my_location',
+                  onPressed: _centerOnCurrentLocation,
+                  backgroundColor: Colors.white,
+                  child: const Icon(Icons.my_location_rounded, color: Colors.blueAccent),
+                ),
+              ],
             ),
           ),
           

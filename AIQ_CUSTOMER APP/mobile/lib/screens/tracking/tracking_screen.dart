@@ -8,6 +8,7 @@ import '../../models/booking_model.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import '../../providers/booking_provider.dart';
+import '../../services/fleet_tracking_service.dart';
 
 class TrackingScreen extends StatefulWidget {
   final String bookingId;
@@ -28,6 +29,7 @@ class _TrackingScreenState extends State<TrackingScreen> with SingleTickerProvid
     super.initState();
     _pulseCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1000))..repeat(reverse: true);
     
+    FleetTrackingService.instance.startLiveTracking();
     _loadBooking();
     
     SocketService.joinBookingRoom(widget.bookingId);
@@ -72,30 +74,40 @@ class _TrackingScreenState extends State<TrackingScreen> with SingleTickerProvid
       body: Stack(
         children: [
           Positioned.fill(
-            child: FlutterMap(
-              options: MapOptions(
-                initialCenter: _collectorLocation != null
-                    ? LatLng(_collectorLocation!['lat'], _collectorLocation!['lng'])
-                    : const LatLng(12.9716, 77.5946), // default to Bangalore
-                initialZoom: 15.0,
-              ),
-              children: [
-                TileLayer(
-                  urlTemplate: 'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.example.takemytrash',
-                ),
-                if (_collectorLocation != null)
-                  MarkerLayer(
-                    markers: [
-                      Marker(
-                        point: LatLng(_collectorLocation!['lat'], _collectorLocation!['lng']),
-                        width: 60,
-                        height: 60,
-                        child: const Text('🚚', style: TextStyle(fontSize: 40)),
-                      ),
-                    ],
+            child: ValueListenableBuilder(
+              valueListenable: FleetTrackingService.instance.vehiclesNotifier,
+              builder: (context, vehicles, _) {
+                final fallbackVehicle = vehicles.isNotEmpty ? vehicles.first : null;
+                final truckLat = _collectorLocation != null
+                    ? (_collectorLocation!['lat'] as num).toDouble()
+                    : (fallbackVehicle?.currentLatitude ?? 12.9750);
+                final truckLng = _collectorLocation != null
+                    ? (_collectorLocation!['lng'] as num).toDouble()
+                    : (fallbackVehicle?.currentLongitude ?? 77.5980);
+
+                return FlutterMap(
+                  options: MapOptions(
+                    initialCenter: LatLng(truckLat, truckLng),
+                    initialZoom: 15.0,
                   ),
-              ],
+                  children: [
+                    TileLayer(
+                      urlTemplate: 'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+                      userAgentPackageName: 'com.example.takemytrash',
+                    ),
+                    MarkerLayer(
+                      markers: [
+                        Marker(
+                          point: LatLng(truckLat, truckLng),
+                          width: 60,
+                          height: 60,
+                          child: const Text('🚚', style: TextStyle(fontSize: 40)),
+                        ),
+                      ],
+                    ),
+                  ],
+                );
+              },
             ),
           ),
 
