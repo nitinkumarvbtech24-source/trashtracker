@@ -15,6 +15,7 @@ import 'services/ward_zone_service.dart';
 import 'ui/login_screen.dart';
 import 'ui/main_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http;
 import 'constants.dart';
 
 void main() async {
@@ -58,9 +59,7 @@ void main() async {
   }
   final savedUrlV7 = prefs.getString('garbage_ai_v7_url');
   if (savedUrlV7 != null && savedUrlV7.isNotEmpty) {
-    if (savedUrlV7.contains('pointer-staff-prodigy') ||
-        savedUrlV7.contains('ngrok') ||
-        savedUrlV7.contains('knowledgestorm') ||
+    if (savedUrlV7.contains('knowledgestorm') ||
         savedUrlV7.contains('copper-labs') ||
         savedUrlV7.contains('frankfurt-tour')) {
       await prefs.remove('garbage_ai_v7_url');
@@ -70,14 +69,25 @@ void main() async {
   }
   MODEL_VERSION = 7; // Set to V7
   
-  // Real-time Firestore sync: Fleet mobile phone automatically binds to the live Cloudflare tunnel
+  // 1. Direct Localhost Probe: If running on local device/emulator with port 5002 open
+  try {
+    final localRes = await http.get(Uri.parse('http://127.0.0.1:5002/api/health')).timeout(const Duration(milliseconds: 1500));
+    if (localRes.statusCode == 200) {
+      updateBackendUrl('http://127.0.0.1:5002');
+      debugPrint('⚡ [Auto-Connect Fleet] Local backend detected directly at http://127.0.0.1:5002');
+    }
+  } catch (_) {}
+
+  // 2. Real-time Firestore sync: Fleet mobile phone automatically binds to the live Cloudflare or Ngrok tunnel
   try {
     FirebaseFirestore.instance.collection('settings').doc('server_config').snapshots().listen((doc) {
       if (doc.exists && doc.data() != null) {
         final remoteUrl = doc.data()!['active_backend_url'] as String?;
         if (remoteUrl != null && remoteUrl.isNotEmpty && remoteUrl.startsWith('http')) {
-          updateBackendUrl(remoteUrl);
-          debugPrint('🌐 [Auto-Sync Fleet] Live Backend URL synced from Firestore: $remoteUrl');
+          if (activeGarbageAiUrl != 'http://127.0.0.1:5002') {
+            updateBackendUrl(remoteUrl);
+            debugPrint('🌐 [Auto-Sync Fleet] Live Backend URL synced from Firestore: $remoteUrl');
+          }
         }
       }
     }, onError: (e) {

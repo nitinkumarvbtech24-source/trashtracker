@@ -1,5 +1,5 @@
-// Cloudflare Tunnel URL providing unlimited bandwidth and auto-reconnection
-String CLOUDFLARE_URL = "https://amounts-middle-while-monroe.trycloudflare.com";
+// Auto-synced active tunnel URL (Ngrok or Cloudflare)
+String CLOUDFLARE_URL = "https://divided-headache-slogan.ngrok-free.dev";
 
 String GARBAGE_AI_URL = CLOUDFLARE_URL;
 String GARBAGE_AI_V2_URL = "https://pointer-staff-prodigy-v2.ngrok-free.dev";

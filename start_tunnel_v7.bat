@@ -1,10 +1,9 @@
 @echo off
-TITLE Cloudflare Tunnel & Mobile Auto-Sync
+TITLE Tunnel Auto-Sync
 echo ========================================================
-echo     STARTING CLOUDFLARE TUNNEL (AUTO-SYNC TO PHONE)
+echo     STARTING TUNNEL (AUTO-SYNC TO MOBILE & WEB)
 echo ========================================================
 echo.
 cd /d "%~dp0"
 py -3.13 start_tunnel.py
 pause
-
