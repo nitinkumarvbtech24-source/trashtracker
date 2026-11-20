@@ -1,5 +1,5 @@
 // Auto-synced active tunnel URL (Ngrok or Cloudflare)
-String CLOUDFLARE_URL = "https://api.trycloudflare.com";
+String CLOUDFLARE_URL = "https://authors-grounds-bag-exposure.trycloudflare.com";
 
 String GARBAGE_AI_URL = CLOUDFLARE_URL;
 String GARBAGE_AI_V2_URL = "https://pointer-staff-prodigy-v2.ngrok-free.dev";
