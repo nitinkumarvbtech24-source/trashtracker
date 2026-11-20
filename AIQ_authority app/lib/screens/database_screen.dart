@@ -1342,11 +1342,6 @@ class _DatabaseScreenState extends State<DatabaseScreen> with SingleTickerProvid
       ),
     );
   }
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 class FullScreenImageScreen extends StatefulWidget {
