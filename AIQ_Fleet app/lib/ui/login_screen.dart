@@ -128,14 +128,91 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF161E2E),
-        title: Text('Backend Settings', style: GoogleFonts.inter(color: Colors.white)),
-        content: TextField(
-          controller: urlController,
-          style: const TextStyle(color: Colors.white),
-          decoration: const InputDecoration(
-            labelText: 'Server URL',
-            labelStyle: TextStyle(color: Colors.white54),
-            enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+        title: Text('Backend Connection (PIN: 5002)', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+        content: SizedBox(
+          width: 380,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextField(
+                controller: urlController,
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+                decoration: const InputDecoration(
+                  labelText: 'Server URL or Quick Code',
+                  hintText: 'Enter 5002, 1 (Ngrok), 2 (Cloudflare) or URL',
+                  hintStyle: TextStyle(color: Colors.white38, fontSize: 11),
+                  labelStyle: TextStyle(color: Colors.white70),
+                  enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                ),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                icon: const Icon(Icons.sync_rounded, size: 16),
+                label: const Text('Auto-Sync Live URL (Code: 5002)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF0F5132),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: () async {
+                  try {
+                    final snap = await FirebaseFirestore.instance.collection('settings').doc('server_config').get();
+                    if (snap.exists && snap.data() != null) {
+                      final remote = snap.data()!['active_backend_url'] as String?;
+                      if (remote != null && remote.isNotEmpty) {
+                        urlController.text = remote;
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.setString('garbage_ai_url', remote);
+                        await prefs.setString('garbage_ai_v7_url', remote);
+                        updateBackendUrl(remote);
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Auto-connected: $remote'), backgroundColor: const Color(0xFF0F5132)));
+                          Navigator.pop(ctx);
+                        }
+                      }
+                    }
+                  } catch (e) {
+                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Sync failed: $e'), backgroundColor: Colors.redAccent));
+                  }
+                },
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: [
+                  ActionChip(
+                    label: const Text('1: Ngrok Static', style: TextStyle(fontSize: 10, color: Colors.white70)),
+                    backgroundColor: const Color(0xFF1E293B),
+                    onPressed: () {
+                      urlController.text = 'https://divided-headache-slogan.ngrok-free.dev';
+                    },
+                  ),
+                  ActionChip(
+                    label: const Text('2: Cloudflare Live', style: TextStyle(fontSize: 10, color: Colors.white70)),
+                    backgroundColor: const Color(0xFF1E293B),
+                    onPressed: () async {
+                      try {
+                        final snap = await FirebaseFirestore.instance.collection('settings').doc('server_config').get();
+                        final cf = snap.data()?['cloudflare_url'] ?? snap.data()?['active_backend_url'];
+                        if (cf != null && cf.toString().isNotEmpty) {
+                          urlController.text = cf.toString();
+                        }
+                      } catch (_) {}
+                    },
+                  ),
+                  ActionChip(
+                    label: const Text('3: Local 5002', style: TextStyle(fontSize: 10, color: Colors.white70)),
+                    backgroundColor: const Color(0xFF1E293B),
+                    onPressed: () {
+                      urlController.text = 'http://127.0.0.1:5002';
+                    },
+                  ),
+                ],
+              ),
+            ],
           ),
         ),
         actions: [
@@ -144,16 +221,35 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
             child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
           ),
           ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0F5132), foregroundColor: Colors.white),
             onPressed: () async {
               final prefs = await SharedPreferences.getInstance();
-              final newUrl = urlController.text.trim();
+              String newUrl = urlController.text.trim();
+              
+              // Handle quick numeric shortcuts
+              if (newUrl == '1') {
+                newUrl = 'https://divided-headache-slogan.ngrok-free.dev';
+              } else if (newUrl == '2') {
+                final snap = await FirebaseFirestore.instance.collection('settings').doc('server_config').get();
+                newUrl = (snap.data()?['cloudflare_url'] ?? snap.data()?['active_backend_url'] ?? 'https://divided-headache-slogan.ngrok-free.dev').toString();
+              } else if (newUrl == '5002') {
+                final snap = await FirebaseFirestore.instance.collection('settings').doc('server_config').get();
+                newUrl = (snap.data()?['active_backend_url'] ?? 'https://divided-headache-slogan.ngrok-free.dev').toString();
+              } else if (newUrl == '3') {
+                newUrl = 'http://127.0.0.1:5002';
+              }
+
               if (newUrl.isNotEmpty) {
+                if (!newUrl.startsWith('http://') && !newUrl.startsWith('https://')) {
+                  newUrl = 'https://$newUrl';
+                }
                 await prefs.setString('garbage_ai_url', newUrl);
-                GARBAGE_AI_URL = newUrl;
+                await prefs.setString('garbage_ai_v7_url', newUrl);
+                updateBackendUrl(newUrl);
               }
               if (mounted) Navigator.pop(ctx);
             },
-            child: const Text('Save'),
+            child: const Text('Save & Connect'),
           ),
         ],
       ),

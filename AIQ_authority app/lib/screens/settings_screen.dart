@@ -122,6 +122,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         await prefs.setString('garbage_ai_url', url);
         GARBAGE_AI_URL = url;
     }
+    updateBackendUrl(url);
     
     setState(() {
       _selectedLinkKey = name;
@@ -141,43 +142,164 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     showDialog(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF1E293B),
-          title: const Text('Add Tunnel Link', style: TextStyle(color: Colors.white)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(labelText: 'Link Name (e.g. WiFi 1)', labelStyle: TextStyle(color: Colors.white54)),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1E293B),
+              title: const Text('Add / Connect Backend', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF0F5132),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                      ),
+                      icon: const Icon(Icons.sync, size: 18),
+                      label: const Text('Auto-Sync Live URL (Code: 5002)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      onPressed: () async {
+                        try {
+                          final snap = await FirebaseFirestore.instance.collection('settings').doc('server_config').get();
+                          if (snap.exists && snap.data() != null) {
+                            final remote = snap.data()!['active_backend_url'] as String?;
+                            if (remote != null && remote.isNotEmpty) {
+                              setDialogState(() {
+                                urlController.text = remote;
+                                if (nameController.text.isEmpty) {
+                                  nameController.text = remote.contains('ngrok') ? 'Ngrok Static' : (remote.contains('trycloudflare') ? 'Cloudflare Live' : 'Active Server');
+                                }
+                              });
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Synced: $remote'), backgroundColor: const Color(0xFF0F5132)));
+                              }
+                            }
+                          }
+                        } catch (e) {
+                          if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Sync failed: $e'), backgroundColor: Colors.redAccent));
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      children: [
+                        ActionChip(
+                          label: const Text('1: Ngrok', style: TextStyle(fontSize: 10, color: Colors.white70)),
+                          backgroundColor: const Color(0xFF334155),
+                          onPressed: () {
+                            setDialogState(() {
+                              urlController.text = 'https://divided-headache-slogan.ngrok-free.dev';
+                              if (nameController.text.isEmpty) nameController.text = 'Ngrok Static';
+                            });
+                          },
+                        ),
+                        ActionChip(
+                          label: const Text('2: Cloudflare', style: TextStyle(fontSize: 10, color: Colors.white70)),
+                          backgroundColor: const Color(0xFF334155),
+                          onPressed: () async {
+                            try {
+                              final snap = await FirebaseFirestore.instance.collection('settings').doc('server_config').get();
+                              final cf = snap.data()?['cloudflare_url'] ?? snap.data()?['active_backend_url'];
+                              if (cf != null && cf.toString().isNotEmpty) {
+                                setDialogState(() {
+                                  urlController.text = cf.toString();
+                                  if (nameController.text.isEmpty) nameController.text = 'Cloudflare Live';
+                                });
+                              }
+                            } catch (_) {}
+                          },
+                        ),
+                        ActionChip(
+                          label: const Text('3: Local 5002', style: TextStyle(fontSize: 10, color: Colors.white70)),
+                          backgroundColor: const Color(0xFF334155),
+                          onPressed: () {
+                            setDialogState(() {
+                              urlController.text = 'http://127.0.0.1:5002';
+                              if (nameController.text.isEmpty) nameController.text = 'Local 5002';
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: nameController,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(
+                        labelText: 'Link Name (e.g. WiFi 1 / Ngrok)',
+                        labelStyle: TextStyle(color: Colors.white54),
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: urlController,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(
+                        labelText: 'URL or Code (5002 / 1 / 2 / 3)',
+                        labelStyle: TextStyle(color: Colors.white54),
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: urlController,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(labelText: 'URL', labelStyle: TextStyle(color: Colors.white54)),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel', style: TextStyle(color: Colors.white54))),
-            TextButton(
-              onPressed: () {
-                String name = nameController.text.trim();
-                String url = urlController.text.trim();
-                if (name.isNotEmpty && url.isNotEmpty) {
-                  if (!url.startsWith('http://') && !url.startsWith('https://')) {
-                    url = 'https://$url';
-                  }
-                  _saveLinksAndSet(name, url);
-                  Navigator.pop(context);
-                }
-              },
-              child: const Text('Save', style: TextStyle(color: Colors.greenAccent)),
-            ),
-          ],
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+                ),
+                TextButton(
+                  onPressed: () async {
+                    String name = nameController.text.trim();
+                    String url = urlController.text.trim();
+
+                    // Expand quick numeric shortcuts
+                    if (url == '1') {
+                      url = 'https://divided-headache-slogan.ngrok-free.dev';
+                      if (name.isEmpty) name = 'Ngrok Static';
+                    } else if (url == '2') {
+                      try {
+                        final snap = await FirebaseFirestore.instance.collection('settings').doc('server_config').get();
+                        url = (snap.data()?['cloudflare_url'] ?? snap.data()?['active_backend_url'] ?? 'https://divided-headache-slogan.ngrok-free.dev').toString();
+                      } catch (_) {
+                        url = 'https://divided-headache-slogan.ngrok-free.dev';
+                      }
+                      if (name.isEmpty) name = 'Cloudflare Live';
+                    } else if (url == '5002') {
+                      try {
+                        final snap = await FirebaseFirestore.instance.collection('settings').doc('server_config').get();
+                        url = (snap.data()?['active_backend_url'] ?? 'https://divided-headache-slogan.ngrok-free.dev').toString();
+                      } catch (_) {
+                        url = 'https://divided-headache-slogan.ngrok-free.dev';
+                      }
+                      if (name.isEmpty) name = 'Server 5002';
+                    } else if (url == '3') {
+                      url = 'http://127.0.0.1:5002';
+                      if (name.isEmpty) name = 'Local 5002';
+                    }
+
+                    if (url.isNotEmpty) {
+                      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                        url = 'https://$url';
+                      }
+                      if (name.isEmpty) name = 'Custom Link';
+                      _saveLinksAndSet(name, url);
+                      Navigator.pop(ctx);
+                    }
+                  },
+                  child: const Text('Save & Connect', style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            );
+          },
         );
       },
     );
