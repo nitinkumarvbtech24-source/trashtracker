@@ -1110,12 +1110,19 @@ class _FleetScreenState extends State<FleetScreen> {
                       ),
                       PolylineLayer(
                         polylines: <Polyline>[
-                          ..._filteredVehicles.where((v) => v.assignedRoute != null && v.assignedRoute!.isNotEmpty).map((v) {
-                            return Polyline(
-                              points: v.assignedRoute!,
-                              color: const Color(0xFF3B82F6).withValues(alpha: 0.5),
-                              strokeWidth: 4.0,
-                            );
+                          ..._filteredVehicles.where((v) => v.assignedRoute != null && v.assignedRoute!.isNotEmpty).expand((v) {
+                            return [
+                              Polyline(
+                                points: v.assignedRoute!,
+                                color: const Color(0xFF0D47A1),
+                                strokeWidth: 7.0,
+                              ),
+                              Polyline(
+                                points: v.assignedRoute!,
+                                color: const Color(0xFF1A73E8),
+                                strokeWidth: 5.0,
+                              ),
+                            ];
                           }),
                           if (_selectedVehicle != null)
                             ...(_vehicleTrails[_selectedVehicle!.vehicleNumber] ?? _vehicleTrails[_selectedVehicle!.id] ?? const <Polyline>[])

@@ -12,23 +12,17 @@ class TrashSpotsService {
   static final TrashSpotsService instance = TrashSpotsService._internal();
 
   final ValueNotifier<List<GarbageFlag>> flagsNotifier = ValueNotifier<List<GarbageFlag>>([]);
-  final ValueNotifier<bool> showPlaceholdersNotifier = ValueNotifier<bool>(true);
+  final ValueNotifier<bool> showPlaceholdersNotifier = ValueNotifier<bool>(false);
 
-  bool get showPlaceholders => showPlaceholdersNotifier.value;
+  bool get showPlaceholders => false; // Real flags only
 
   Future<void> setShowPlaceholders(bool value) async {
-    if (showPlaceholdersNotifier.value != value) {
-      showPlaceholdersNotifier.value = value;
-      try {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setBool('show_placeholder_flags', value);
-      } catch (_) {}
-      _mergeAndNotify();
-    }
+    showPlaceholdersNotifier.value = false;
+    _mergeAndNotify();
   }
 
   void toggleShowPlaceholders() {
-    setShowPlaceholders(!showPlaceholdersNotifier.value);
+    setShowPlaceholders(false);
   }
   
   List<GarbageFlag> _firestoreFlags = [];
@@ -218,7 +212,7 @@ class TrashSpotsService {
   List<GarbageFlag> get activeFlags {
     return flagsNotifier.value.where((f) {
       if (!f.isTrashDetected) return false;
-      if (!showPlaceholders && f.isPlaceholder) return false;
+      if (f.isPlaceholder) return false; // Strictly real flags only
       return true;
     }).toList();
   }

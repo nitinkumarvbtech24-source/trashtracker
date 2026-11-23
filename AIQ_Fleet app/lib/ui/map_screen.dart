@@ -14,7 +14,6 @@ import 'route_assigner_screen.dart';
 import '../widgets/trash_pinpoint_marker.dart';
 import '../models/garbage_flag.dart';
 import '../widgets/trash_flag_inspection_modal.dart';
-import '../widgets/placeholder_map_switch.dart';
 
 class TrailSegment {
   final LatLng start;
@@ -117,24 +116,22 @@ class _MapScreenState extends State<MapScreen> {
   List<Map<String, dynamic>> _trashSpots = [];
   StreamSubscription<QuerySnapshot>? _trashSub;
   bool _showFlags = true;
-  bool _showPlaceholders = true;
+  String? _navigationMode; // 'assigned_route' or 'trace_path'
   bool _isZoomedInForFlags = false; // Zoom >= 16.5
 
   Map<String, Map<String, dynamic>> _liveOtherVehicles = {};
   StreamSubscription<QuerySnapshot>? _liveTrackingSub;
 
   List<Map<String, dynamic>> get _filteredTrashSpots {
-    if (_showPlaceholders) return _trashSpots;
     return _trashSpots.where((s) {
-      final isPlaceholder = s['is_placeholder'] == true;
+      final isPlaceholder = s['is_placeholder'] == true ||
+                            s['placeholder'] == true ||
+                            s['id']?.toString().toLowerCase().startsWith('flag_') == true ||
+                            s['id']?.toString().toLowerCase().startsWith('seed_') == true;
       final isReal = s['is_real'] == true || s['is_placeholder'] == false;
       return !isPlaceholder && isReal;
     }).toList();
   }
-
-  int get _realFlagsCount => _trashSpots.where((s) {
-    return s['is_placeholder'] != true && (s['is_real'] == true || s['is_placeholder'] == false);
-  }).length;
 
   bool _allowRouteAssignment = false;
   StreamSubscription<DocumentSnapshot>? _permissionsSub;
@@ -267,6 +264,14 @@ class _MapScreenState extends State<MapScreen> {
         'lastColor': color.value,
         'lastStatus': cameraService.latestRoadStatus,
         'isActive': true,
+        'navigation_mode': _navigationMode ?? 'trace_path',
+        'traversed_path': FieldValue.arrayUnion([
+          {
+            'lat': end.latitude,
+            'lng': end.longitude,
+            'timestamp': nowMs,
+          }
+        ]),
         'timestamp': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true)).catchError((_) {});
     }
@@ -423,25 +428,318 @@ class _MapScreenState extends State<MapScreen> {
 
 
   void _toggleNavigation(LatLng? currentLoc, double heading) {
-    setState(() {
-      _isNavigating = !_isNavigating;
-      _isFollowingUser = _isNavigating;
-      if (_isNavigating) {
-        _lastRecordedPosition = currentLoc;
-      } else {
-        _lastRecordedPosition = null;
-      }
-    });
-    
-    // Update telemetry state so it syncs to Firebase
-    context.read<TelemetryService>().setNavigating(_isNavigating);
-
     if (_isNavigating) {
-      if (currentLoc != null) {
-        _mapController.moveAndRotate(currentLoc, 18.0, heading);
-      }
+      _stopNavigation();
     } else {
-      _mapController.rotate(0);
+      _showNavigationModeDialog(currentLoc, heading);
+    }
+  }
+
+  void _stopNavigation() {
+    setState(() {
+      _isNavigating = false;
+      _navigationMode = null;
+      _isFollowingUser = false;
+      _lastRecordedPosition = null;
+    });
+
+    context.read<TelemetryService>().setNavigating(false);
+    _mapController.rotate(0);
+
+    final auth = context.read<AuthService>();
+    if (auth.vehicleNumber != null) {
+      FirebaseFirestore.instance.collection('live_tracking').doc(auth.vehicleNumber).set({
+        'isActive': false,
+        'navigation_mode': 'stopped',
+        'timestamp': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true)).catchError((_) {});
+
+      FirebaseFirestore.instance.collection('vehicles').doc(auth.vehicleNumber).set({
+        'isActive': false,
+        'navigation_mode': 'stopped',
+      }, SetOptions(merge: true)).catchError((_) {});
+    }
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Navigation ended'),
+          backgroundColor: Color(0xFF1E293B),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  void _showNavigationModeDialog(LatLng? currentLoc, double heading) {
+    final pos = currentLoc ?? _lastRecordedPosition ?? const LatLng(12.9716, 77.5946);
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF0F172A),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) {
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 44,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Select Fleet Navigation Mode',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Choose how you want to navigate and record this collection trip:',
+                style: TextStyle(color: Colors.white70, fontSize: 13),
+              ),
+              const SizedBox(height: 18),
+              // Option 1: Follow Assigned Route
+              InkWell(
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _startAssignedRouteNavigation(pos, heading);
+                },
+                borderRadius: BorderRadius.circular(16),
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E293B),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: const Color(0xFF1A73E8), width: 1.5),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1A73E8).withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(Icons.alt_route_rounded, color: Color(0xFF1A73E8), size: 28),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: const [
+                            Text(
+                              'Follow Assigned Route',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              'Google Maps blue route from Source to Destination. Registered in Authority App.',
+                              style: TextStyle(color: Colors.white60, fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Icon(Icons.chevron_right, color: Colors.white54),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              // Option 2: Trace Vehicle Path
+              InkWell(
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _startTracePathNavigation(pos, heading);
+                },
+                borderRadius: BorderRadius.circular(16),
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E293B),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: const Color(0xFF10B981), width: 1.5),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF10B981).withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(Icons.timeline_rounded, color: Color(0xFF10B981), size: 28),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: const [
+                            Text(
+                              'Trace Path',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              'Live GPS breadcrumbs tracing vehicle movements in both Fleet and Authority apps.',
+                              style: TextStyle(color: Colors.white60, fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Icon(Icons.chevron_right, color: Colors.white54),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _startAssignedRouteNavigation(LatLng currentLoc, double heading) async {
+    final auth = context.read<AuthService>();
+    final vNum = auth.vehicleNumber ?? 'KA-04-TR-102';
+
+    // If no assigned route currently in memory, construct an intelligent collection route:
+    // Source: currentLoc -> Real trash flags in ward -> Destination: Ward Depot
+    if (_assignedRoute.isEmpty) {
+      List<LatLng> generated = [currentLoc];
+      final realSpots = _filteredTrashSpots;
+      
+      final distanceCalc = const Distance();
+      final sortedSpots = List<Map<String, dynamic>>.from(realSpots);
+      sortedSpots.sort((a, b) {
+        final da = distanceCalc.as(LengthUnit.Meter, currentLoc, LatLng((a['lat'] as num).toDouble(), (a['lng'] as num).toDouble()));
+        final db = distanceCalc.as(LengthUnit.Meter, currentLoc, LatLng((b['lat'] as num).toDouble(), (b['lng'] as num).toDouble()));
+        return da.compareTo(db);
+      });
+
+      for (var s in sortedSpots.take(4)) {
+        generated.add(LatLng((s['lat'] as num).toDouble(), (s['lng'] as num).toDouble()));
+      }
+
+      final lastPt = generated.last;
+      final destination = LatLng(lastPt.latitude + 0.012, lastPt.longitude + 0.009);
+      generated.add(destination);
+
+      _assignedRoute = generated;
+      _assignedCheckpoints = generated.sublist(1);
+    }
+
+    // Register this route in Firestore so Authority App sees it immediately
+    try {
+      final routePayload = _assignedRoute.map((e) => {'lat': e.latitude, 'lng': e.longitude}).toList();
+      final checkpointsPayload = _assignedCheckpoints.map((e) => {'lat': e.latitude, 'lng': e.longitude}).toList();
+
+      await FirebaseFirestore.instance.collection('vehicles').doc(vNum).set({
+        'assignedRoute': routePayload,
+        'assignedCheckpoints': checkpointsPayload,
+        'navigation_mode': 'assigned_route',
+        'isActive': true,
+        'lastHeartbeat': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      await FirebaseFirestore.instance.collection('live_tracking').doc(vNum).set({
+        'assignedRoute': routePayload,
+        'navigation_mode': 'assigned_route',
+        'isActive': true,
+        'lat': currentLoc.latitude,
+        'lng': currentLoc.longitude,
+        'speed': 0.0,
+        'timestamp': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint("Error syncing assigned route to Firestore: $e");
+    }
+
+    setState(() {
+      _isNavigating = true;
+      _navigationMode = 'assigned_route';
+      _isFollowingUser = true;
+      _lastRecordedPosition = currentLoc;
+    });
+
+    context.read<TelemetryService>().setNavigating(true);
+    _mapController.moveAndRotate(currentLoc, 18.0, heading);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Navigation: Following Assigned Route (Blue Google Maps Tracing)'),
+          backgroundColor: Color(0xFF1A73E8),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  Future<void> _startTracePathNavigation(LatLng currentLoc, double heading) async {
+    final auth = context.read<AuthService>();
+    final vNum = auth.vehicleNumber ?? 'KA-04-TR-102';
+
+    // Register Trace Path mode in Firestore
+    try {
+      await FirebaseFirestore.instance.collection('vehicles').doc(vNum).set({
+        'navigation_mode': 'trace_path',
+        'isActive': true,
+        'lastHeartbeat': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      await FirebaseFirestore.instance.collection('live_tracking').doc(vNum).set({
+        'navigation_mode': 'trace_path',
+        'isActive': true,
+        'lat': currentLoc.latitude,
+        'lng': currentLoc.longitude,
+        'speed': 0.0,
+        'timestamp': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint("Error syncing trace path mode to Firestore: $e");
+    }
+
+    setState(() {
+      _isNavigating = true;
+      _navigationMode = 'trace_path';
+      _isFollowingUser = true;
+      _lastRecordedPosition = currentLoc;
+    });
+
+    context.read<TelemetryService>().setNavigating(true);
+    _mapController.moveAndRotate(currentLoc, 18.0, heading);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Navigation: Tracing Vehicle Driven Path Live'),
+          backgroundColor: Color(0xFF10B981),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
   }
 
@@ -714,18 +1012,74 @@ class _MapScreenState extends State<MapScreen> {
               ),
               ...WardZoneService.instance.buildLayers(),
               
-              if (_assignedRoute.isNotEmpty)
+              if (_assignedRoute.isNotEmpty) ...[
                 PolylineLayer(
                   polylines: [
+                    // Deep Navy Casing Border
                     Polyline(
                       points: _assignedRoute,
-                      strokeWidth: 6,
-                      color: Colors.blueAccent.withOpacity(0.5), // Make assigned route slightly transparent
-                      borderStrokeWidth: 2,
-                      borderColor: Colors.white.withOpacity(0.5),
+                      strokeWidth: 8.5,
+                      color: const Color(0xFF0D47A1),
+                    ),
+                    // Vibrant Google Maps Navigation Blue
+                    Polyline(
+                      points: _assignedRoute,
+                      strokeWidth: 6.0,
+                      color: const Color(0xFF1A73E8),
                     ),
                   ],
                 ),
+                MarkerLayer(
+                  markers: [
+                    // Start Pin (Green Circle with Play Arrow)
+                    Marker(
+                      point: _assignedRoute.first,
+                      width: 44,
+                      height: 44,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF10B981),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 3),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.3),
+                              blurRadius: 6,
+                              offset: const Offset(0, 3),
+                            ),
+                          ],
+                        ),
+                        child: const Center(
+                          child: Icon(Icons.play_arrow_rounded, color: Colors.white, size: 24),
+                        ),
+                      ),
+                    ),
+                    // Destination Pin (Red Circle with Flag)
+                    Marker(
+                      point: _assignedRoute.last,
+                      width: 44,
+                      height: 44,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFEF4444),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 3),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.3),
+                              blurRadius: 6,
+                              offset: const Offset(0, 3),
+                            ),
+                          ],
+                        ),
+                        child: const Center(
+                          child: Icon(Icons.flag_rounded, color: Colors.white, size: 22),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
                 
               if (_navigationTrail.isNotEmpty)
                 PolylineLayer(
@@ -866,28 +1220,11 @@ class _MapScreenState extends State<MapScreen> {
               ),
             ),
           
-          // Top Controls Bar: Placeholder Switch & Settings Menu
+          // Top Controls Bar: Settings Menu
           Positioned(
             top: 50,
             right: 16,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                PlaceholderMapSwitch(
-                  showPlaceholders: _showPlaceholders,
-                  realCount: _realFlagsCount,
-                  totalCount: _trashSpots.length,
-                  onChanged: (val) {
-                    setState(() {
-                      _showPlaceholders = val;
-                      _cachedFleetTrashMarkers.clear();
-                    });
-                  },
-                  isDark: true,
-                  compact: true,
-                ),
-                const SizedBox(width: 8),
-                PopupMenuButton<String>(
+            child: PopupMenuButton<String>(
                   icon: Container(
                     padding: const EdgeInsets.all(8),
                     decoration: const BoxDecoration(
@@ -936,9 +1273,7 @@ class _MapScreenState extends State<MapScreen> {
                       ),
                   ],
                 ),
-              ],
-            ),
-          ),
+              ),
           
           // Master-Dashboard Style Zoom in / Zoom out & Recenter
           Positioned(
@@ -1076,9 +1411,13 @@ class _MapScreenState extends State<MapScreen> {
                           ),
                           const SizedBox(width: 8),
                           Text(
-                            isVisionActive
-                                ? 'AI Road Tracing: Clean (🟢) | Trash (🟠) | Dirty (🔴)'
-                                : 'Navigation Tracing: Standard Blue (Camera/Model Off)',
+                            _navigationMode == 'assigned_route'
+                                ? 'Following Assigned Route (Google Maps Blue Tracing)'
+                                : (_navigationMode == 'trace_path'
+                                    ? 'Tracing Vehicle Path Live (Driven Breadcrumbs)'
+                                    : (isVisionActive
+                                        ? 'AI Road Tracing: Clean (🟢) | Trash (🟠) | Dirty (🔴)'
+                                        : 'Live Navigation Active')),
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 11,

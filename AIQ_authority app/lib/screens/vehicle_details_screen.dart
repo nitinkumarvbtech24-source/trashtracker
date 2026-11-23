@@ -988,12 +988,17 @@ class _VehicleDetailsScreenState extends State<VehicleDetailsScreen> {
     final displayLocation = currentVehicle.currentLocation ?? widget.vehicle.currentLocation;
 
     if (currentVehicle.assignedRoute != null && currentVehicle.assignedRoute!.isNotEmpty) {
+      // Outer Navy Casing
       routePolylines.add(Polyline(
         points: currentVehicle.assignedRoute!,
-        strokeWidth: 5,
-        color: Colors.purpleAccent.withValues(alpha: 0.6),
-        borderStrokeWidth: 2,
-        borderColor: Colors.white.withValues(alpha: 0.5),
+        strokeWidth: 7.5,
+        color: const Color(0xFF0D47A1),
+      ));
+      // Inner Google Maps Vibrant Blue
+      routePolylines.add(Polyline(
+        points: currentVehicle.assignedRoute!,
+        strokeWidth: 5.0,
+        color: const Color(0xFF1A73E8),
       ));
     }
 

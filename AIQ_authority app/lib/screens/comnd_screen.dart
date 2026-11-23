@@ -1160,7 +1160,7 @@ class _ComndScreenState extends State<ComndScreen> {
     const double clusterDist = 0.00018;
     final List<List<Map<String, dynamic>>> clusters = [];
 
-    // Draw assigned road routes and real-time color-coded driven trails for live fleet vehicles
+    // Draw assigned road routes (Google Maps Blue) and real-time color-coded driven trails for live fleet vehicles
     List<Polyline> routePolylines = [];
     for (var entry in _liveVehicles.entries) {
       final data = entry.value;
@@ -1168,10 +1168,28 @@ class _ComndScreenState extends State<ComndScreen> {
         final List<dynamic> rawRoute = data['assignedRoute'];
         final pts = rawRoute.map((e) => LatLng((e['lat'] as num).toDouble(), (e['lng'] as num).toDouble())).toList();
         if (pts.isNotEmpty) {
+          // Google Maps Blue Polyline with outer border casing
           routePolylines.add(Polyline(
             points: pts,
-            color: const Color(0xFF3B82F6).withValues(alpha: 0.5),
-            strokeWidth: 4.0,
+            color: const Color(0xFF0D47A1), // Deep Navy Border Casing
+            strokeWidth: 8.0,
+          ));
+          routePolylines.add(Polyline(
+            points: pts,
+            color: const Color(0xFF1A73E8), // Vibrant Google Maps Navigation Blue
+            strokeWidth: 5.5,
+          ));
+        }
+      }
+      // Real-time live traversed path streamed directly from moving truck
+      if (data['traversed_path'] != null) {
+        final List<dynamic> rawPath = data['traversed_path'];
+        final pathPts = rawPath.map((e) => LatLng((e['lat'] as num).toDouble(), (e['lng'] as num).toDouble())).toList();
+        if (pathPts.length >= 2) {
+          routePolylines.add(Polyline(
+            points: pathPts,
+            color: const Color(0xFF00E676), // Bright Green Live Traced Trail
+            strokeWidth: 5.0,
           ));
         }
       }
